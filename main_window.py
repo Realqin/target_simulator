@@ -8,7 +8,7 @@ import json
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QGridLayout, QGroupBox, QTextEdit, QSpacerItem, QSizePolicy,
-    QComboBox, QCheckBox
+    QComboBox, QCheckBox, QTabWidget
 )
 from PyQt5.QtCore import pyqtSlot, QTimer, Qt
 from PyQt5.QtGui import QIcon, QCursor
@@ -69,12 +69,37 @@ class MainWindow(QWidget):
 
     def init_ui(self):
         """
-        初始化和构建整个用户界面。
+        初始化和构建整个用户界面,现在使用QTabWidget。
         """
         # --- 主布局 ---
         main_layout = QVBoxLayout(self)
-        top_h_layout = QHBoxLayout()
+        self.setLayout(main_layout)
 
+        # --- 创建Tab控件 ---
+        self.tab_widget = QTabWidget()
+        main_layout.addWidget(self.tab_widget)
+
+        # --- 创建三个标签页 ---
+        self.realtime_tab = QWidget()
+        self.static_info_tab = QWidget()
+        self.playback_tab = QWidget()
+
+        self.tab_widget.addTab(self.realtime_tab, "实时目标")
+        self.tab_widget.addTab(self.static_info_tab, "静态信息")
+        self.tab_widget.addTab(self.playback_tab, "回放目标")
+
+        # --- 配置每个标签页的布局 ---
+        self.setup_realtime_tab()
+        self.setup_static_info_tab()
+        self.setup_playback_tab()
+
+        # --- 设置光标样式 ---
+        self.set_cursors()
+
+    def setup_realtime_tab(self):
+        """配置“实时目标”标签页的UI内容"""
+        tab_layout = QHBoxLayout(self.realtime_tab)
+        
         # --- 左侧布局 (包含目标信息和AIS静态信息) ---
         left_v_layout = QVBoxLayout()
 
@@ -98,6 +123,7 @@ class MainWindow(QWidget):
         # 创建并添加信息源模块
         left_v_layout.addWidget(self.create_source_input_group())
         left_v_layout.addStretch(1)
+
         # --- 右侧布局 (包含控制操作和日志) ---
         right_v_layout = QVBoxLayout()
         right_v_layout.addWidget(self.create_control_group())
@@ -117,20 +143,24 @@ class MainWindow(QWidget):
         self.log_group.toggled.connect(self.log_display.setVisible)
         
         right_v_layout.addWidget(self.log_group, stretch=1)
-        
-        #right_v_layout.addStretch(1)
 
-        # --- 组合左右布局 ---
-        top_h_layout.addLayout(left_v_layout, stretch=3)
-        top_h_layout.addLayout(right_v_layout, stretch=1)
-        main_layout.addLayout(top_h_layout)
+        # --- 组合左右布局到实时目标Tab ---
+        tab_layout.addLayout(left_v_layout, stretch=3)
+        tab_layout.addLayout(right_v_layout, stretch=1)
 
-        
+    def setup_static_info_tab(self):
+        """配置“静态信息”标签页的UI内容"""
+        layout = QVBoxLayout(self.static_info_tab)
+        label = QLabel("静态信息功能正在开发中...")
+        label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(label)
 
-        self.setLayout(main_layout)
-
-        # --- 设置光标样式 ---
-        self.set_cursors()
+    def setup_playback_tab(self):
+        """配置“回放目标”标签页的UI内容"""
+        layout = QVBoxLayout(self.playback_tab)
+        label = QLabel("回放目标功能正在开发中...")
+        label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(label)
 
     def set_cursors(self):
         """统一设置所有控件的光标样式"""
@@ -155,8 +185,10 @@ class MainWindow(QWidget):
         for line_edit in self.findChildren(QLineEdit):
             line_edit.setCursor(ibeam_cursor)
         
-        self.paste_input.setCursor(ibeam_cursor)
-        self.log_display.setCursor(ibeam_cursor)
+        if hasattr(self, 'paste_input'):
+            self.paste_input.setCursor(ibeam_cursor)
+        if hasattr(self, 'log_display'):
+            self.log_display.setCursor(ibeam_cursor)
 
     def create_target_info_group(self):
         """创建“目标信息”模块的 GroupBox"""
@@ -377,7 +409,7 @@ class MainWindow(QWidget):
         down_left_btn = QPushButton("↙")
         down_right_btn = QPushButton("↘")
 
-        # 连接信���
+        # 连接信号
         up_btn.clicked.connect(lambda: self.update_course_from_button(0))
         down_btn.clicked.connect(lambda: self.update_course_from_button(180))
         left_btn.clicked.connect(lambda: self.update_course_from_button(270))
