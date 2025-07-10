@@ -1,0 +1,43 @@
+{
+  "kafka": {
+    "bootstrap_servers": "localhost:9092",
+    "topic": "fusion_target_topic"
+  },
+  "ui_options": {
+    "eTargetType": {
+      "RADAR": 0,
+      "AIS_A": 1,
+      "AIS_B": 2,
+      "BDS": 3,
+      "CCTV": 4,
+      "RADAR_AIS_A": 5,
+      "RADAR_AIS_B": 6,
+      "RADAR_BDS": 7,
+      "RADAR_CCTV": 8,
+      "AIS_A_BDS": 9,
+      "AIS_B_BDS": 10,
+      "RADAR_AIS_A_BDS": 11,
+      "RADAR_AIS_B_BDS": 12,
+      "CCTV_AIS": 13,
+      "OTHERS": 14
+    },
+    "shiptype": {
+      "渔船": 0,
+      "货船": 1,
+      "油船": 2,
+      "客船": 3,
+      "拖船": 4,
+      "其他": 99
+    },
+    "sost": {
+      "正常": 1,
+      "预测": 2,
+      "丢失": 3
+    },
+    "dataStatus": {
+      "new": 0,
+      "update": 1,
+      "delete": 2
+    }
+  }
+}

@@ -1,0 +1,106 @@
+syntax = "proto3";
+package uniseas.fusionTarget.protocol;
+option java_package = "protobuf";
+//option java_multiple_files = true;
+//option java_generic_services = false;
+
+message Position {
+  double latitude  = 1;
+  double longitude = 2;
+}
+
+enum CurStatusProto {
+  UNDEFINED=0;
+  NEW=1;
+  UPDATE=2;
+  DELETED=3;
+}
+
+message cTargProto {
+  uint32   displayId=1;
+  uint32   mmsi=2;
+  uint32   id_r=3;
+  uint32   state=4;
+  uint32   quality=5;
+  uint32   period=6;
+  Position geoPtn=7;
+  float course=8;
+  float speed=9;
+  float heading=10;
+  uint32  len=11;
+  uint32 wid=12;
+  uint32 shiptype=13;
+  uint32  s_class=14;
+  uint32 flags=15;
+  uint32 m_mmsi=16;
+  string vesselName=17;
+  string vendorId=18;
+  string callSign=19;
+  uint32  imo=20;
+  uint64  id=21;
+  uint32 fleetId=22;
+  string comment=23;
+  float  rec_course=24;
+  float rec_speed=25;
+  uint32 aidtype=26;
+}
+
+message SourceType{
+  string          provider=1;
+  string          type=2;
+  repeated string ids=3;
+}
+
+//message FusionedTargetInfo{
+//  uint64 ullUniqueId = 1;
+//  uint32 uiStationId = 2;
+//  Position oPos = 3;
+//  uint32 uiStationType = 4;
+//  //65'A',82'R'
+//  uint64 ullPosUpdateTime = 5;
+//}
+
+//目标类型
+enum TargetType{
+  TT_UNKNOWN=0;
+  TT_A=1;             //ais a
+  TT_AP=2;            //ais a + predicted
+  TT_B=3;             //ais b
+  TT_BP=4;            //ais b + predicted
+  TT_AID=5;           //ais aid
+  TT_VAID=6;          //ais virtual aid
+  TT_R=7;             //radar
+  TT_RP=8;            //radar + predicted
+  TT_AR=9;            //ais a + radar
+  TT_ARP=11;          //ais a + radar + predicted
+  TT_ALR=12;           //ais a lost + radar
+  TT_ALRP=13;          //ais a lost + radar + predicted
+  TT_BR=14;           //ais b + radar
+  TT_BRP=15;          //ais b + radar + predicted
+  TT_BLR=16;           //ais b lost + radar
+  TT_BLRP=17;          //ais b lost + radar + predicted
+  TT_AIDR=18;         //ais aid + radar
+  TT_VAIDR=19;        //ais virtual aid + radar
+  TT_S=20;            //static
+  TT_SR=21;           //static + radar
+  TT_RR=22;           //radar + radar
+  TT_RRP=23;          //radar + radar + predicted
+}
+
+message TargetProto {
+  uint64 id=1;
+  cTargProto pos=2;
+  uint32 sost=3;
+  uint64 lastTm=4;
+  uint32 adapterId=5;
+  CurStatusProto status=6;
+  uint32 maxLen=7;
+  uint32 minLen =8;
+  repeated SourceType sources=9;
+  //repeated FusionedTargetInfo vecFusionedTargetInfo = 10;
+  TargetType eTargetType=11;
+}
+
+message TargetProtoList {
+  repeated TargetProto list = 1;
+}

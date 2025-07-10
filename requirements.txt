@@ -1,0 +1,4 @@
+PyQt5==5.15.10
+kafka-python
+protobuf
+grpcio-tools
