@@ -3,6 +3,20 @@
     "bootstrap_servers": "localhost:9092",
     "topic": "fusion_target_topic"
   },
+  "mysql": {
+    "host": "10.100.0.14",
+    "port": 9030,
+    "user": "root",
+    "password": "",
+    "database": "ods"
+  },
+  "starrocks": {
+    "host": "10.100.0.14",
+    "port": 9030,
+    "user": "root",
+    "password": "",
+    "database": "ods"
+  },
   "ui_options": {
     "eTargetType": {
       "RADAR": 0,

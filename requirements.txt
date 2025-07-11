@@ -1,4 +1,32 @@
+blinker==1.9.0
+click==8.2.1
+colorama==0.4.6
+Flask==3.1.1
+greenlet==3.2.3
+grep==0.3.2
+grpcio==1.73.1
+grpcio-tools==1.73.1
+itsdangerous==2.2.0
+Jinja2==3.1.6
+kafka-python==2.2.15
+MarkupSafe==3.0.2
+mysql-connector-python==9.3.0
+npx==0.1.6
+numpy==2.3.0
+pandas @ file:///C:/Users/caoqin/Downloads/pandas-2.2.3-cp312-cp312-win_amd64.whl#sha256=59ef3764d0fe818125a5097d2ae867ca3fa64df032331b7e0917cf5d7bf66b13
+playwright @ file:///C:/Users/caoqin/Downloads/playwright-1.52.0-py3-none-win_amd64.whl#sha256=dcbf75101eba3066b7521c6519de58721ea44379eb17a0dafa94f9f1b17f59e4
+protobuf==6.31.1
+pyee==13.0.0
+PyMySQL==1.1.1
 PyQt5==5.15.10
-kafka-python
-protobuf
-grpcio-tools
+PyQt5-Qt5==5.15.2
+PyQt5_sip==12.17.0
+python-dateutil==2.9.0.post0
+pytz==2025.2
+setuptools==80.9.0
+six==1.17.0
+source==1.2.0
+SQLAlchemy==2.0.41
+typing_extensions==4.14.0
+tzdata==2025.2
+Werkzeug==3.1.3
