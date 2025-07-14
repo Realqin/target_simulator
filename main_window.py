@@ -80,10 +80,23 @@ class MainWindow(QWidget):
         self.sending_timer = QTimer(self)
         self.sending_timer.timeout.connect(self.send_data)
 
+        # 为静态信息页签创建独立的状态
+        self.static_inputs = {}
+        self.static_sending_timer = QTimer(self)
+        self.static_sending_timer.timeout.connect(self.send_static_data)
+        self.static_paste_input = None
+        self.static_frequency_input = None
+        self.static_start_pause_btn = None
+        self.static_terminate_btn = None
+        self.static_data_status_checkbox = None
+        self.static_log_group = None
+        self.static_log_display = None
+
         # 初始化UI界面
         self.init_ui()
-
+        
         # 初始化Kafka生产者，并将UI的日志函数作为回调传递进去
+        # 注意: Kafka连接日志等全局信息将显示在主（实时）日志窗口
         self.kafka_producer = KProducer(
             bootstrap_servers=self.config['kafka']['bootstrap_servers'],
             log_callback=self.log_message
@@ -161,13 +174,6 @@ class MainWindow(QWidget):
         # --- 设置光标样式 ---
         self.set_cursors()
 
-        # --- 连接初始化按钮信号 ---
-        self.save_init_btn.clicked.connect(self.save_initial_target)
-        self.load_init_btn.clicked.connect(self.load_initial_target)
-
-        # --- 启动时尝试加载一次 ---
-        self.load_initial_target(is_silent=True)
-
     def setup_realtime_tab(self):
         """配置“实时目标”标签页的UI内容"""
         tab_layout = QHBoxLayout(self.realtime_tab)
@@ -190,8 +196,6 @@ class MainWindow(QWidget):
 
         # 创建并添加目标信息模块
         left_v_layout.addWidget(self.create_target_info_group())
-        # 创建并添加AIS静态信息模块
-        left_v_layout.addWidget(self.create_ais_static_info_group())
         # 创建并添加信息源模块
         left_v_layout.addWidget(self.create_source_input_group())
         left_v_layout.addStretch(1)
@@ -200,6 +204,8 @@ class MainWindow(QWidget):
         init_button_layout = QHBoxLayout()
         self.save_init_btn = QPushButton("存为初始目标")
         self.load_init_btn = QPushButton("一键初始化")
+        self.save_init_btn.clicked.connect(self.save_initial_target)
+        self.load_init_btn.clicked.connect(self.load_initial_target)
         init_button_layout.addStretch(1)
         init_button_layout.addWidget(self.save_init_btn)
         init_button_layout.addWidget(self.load_init_btn)
@@ -231,10 +237,50 @@ class MainWindow(QWidget):
 
     def setup_static_info_tab(self):
         """配置“静态信息”标签页的UI内容"""
-        layout = QVBoxLayout(self.static_info_tab)
-        label = QLabel("静态信息功能正在开发中...")
-        label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(label)
+        tab_layout = QHBoxLayout(self.static_info_tab)
+        
+        # --- 左侧布局 (包含目标信息和AIS静态信息) ---
+        left_v_layout = QVBoxLayout()
+
+        # “快速识别”功能区
+        paste_group = QGroupBox("快速识别")
+        paste_layout = QHBoxLayout()
+        self.static_paste_input = QTextEdit()
+        self.static_paste_input.setPlaceholderText("在此粘贴内容（可多行），然后点击识别...")
+        self.static_paste_input.setFixedHeight(80)
+        recognize_btn = QPushButton("识别")
+        recognize_btn.clicked.connect(self.recognize_and_fill_static)
+        paste_layout.addWidget(self.static_paste_input)
+        paste_layout.addWidget(recognize_btn)
+        paste_group.setLayout(paste_layout)
+        left_v_layout.addWidget(paste_group)
+
+        # 创建并添加AIS静态信息模块
+        left_v_layout.addWidget(self.create_ais_static_info_group_static())
+        left_v_layout.addStretch(1)
+
+        # --- 右侧布局 (包含控制操作和日志) ---
+        right_v_layout = QVBoxLayout()
+        right_v_layout.addWidget(self.create_control_group_static())
+        
+        # 为静态页签创建独立的日志区
+        self.static_log_group = QGroupBox("发送日志 (静态)")
+        self.static_log_group.setCheckable(True)
+        self.static_log_group.setChecked(True)
+        log_layout = QVBoxLayout()
+        self.static_log_display = QTextEdit()
+        self.static_log_display.setReadOnly(True)
+        self.static_log_display.setMinimumHeight(200)
+        self.static_log_display.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        log_layout.addWidget(self.static_log_display)
+        self.static_log_group.setLayout(log_layout)
+        self.static_log_group.toggled.connect(self.static_log_display.setVisible)
+        
+        right_v_layout.addWidget(self.static_log_group, stretch=1)
+
+        # --- 组合左右布局到静态信息Tab ---
+        tab_layout.addLayout(left_v_layout, stretch=3)
+        tab_layout.addLayout(right_v_layout, stretch=1)
 
     def setup_playback_tab(self):
         """配置“回放目标”标签页的UI内容"""
@@ -332,6 +378,10 @@ class MainWindow(QWidget):
         if hasattr(self, 'log_display'):
             self.log_display.setCursor(ibeam_cursor)
 
+    # ===================================================================
+    # 实时目标 - UI 创建
+    # ===================================================================
+
     def create_target_info_group(self):
         """创建“目标信息”模块的 GroupBox"""
         group_box = QGroupBox("目标信息（必填）")
@@ -373,7 +423,7 @@ class MainWindow(QWidget):
         id_layout = QHBoxLayout()
         id_layout.addWidget(self.inputs["id"])
         random_id_btn = QPushButton("随机")
-        random_id_btn.clicked.connect(lambda: self._generate_random_value("id", "ID"))
+        random_id_btn.clicked.connect(lambda: self._generate_random_value("id", "ID", self.inputs, self.log_message))
         id_layout.addWidget(random_id_btn)
         grid_layout.addWidget(QLabel("ID:"), 1, 0, Qt.AlignRight)
         grid_layout.addLayout(id_layout, 1, 1)
@@ -382,7 +432,7 @@ class MainWindow(QWidget):
         mmsi_layout = QHBoxLayout()
         mmsi_layout.addWidget(self.inputs["mmsi"])
         random_mmsi_btn = QPushButton("随机")
-        random_mmsi_btn.clicked.connect(lambda: self._generate_random_value("mmsi", "MMSI"))
+        random_mmsi_btn.clicked.connect(lambda: self._generate_random_value("mmsi", "MMSI", self.inputs, self.log_message))
         mmsi_layout.addWidget(random_mmsi_btn)
         grid_layout.addWidget(QLabel("MMSI:"), 1, 2, Qt.AlignRight)
         grid_layout.addLayout(mmsi_layout, 1, 3)
@@ -391,13 +441,11 @@ class MainWindow(QWidget):
         bds_layout = QHBoxLayout()
         bds_layout.addWidget(self.inputs["bds"])
         random_bds_btn = QPushButton("随机")
-        random_bds_btn.clicked.connect(lambda: self._generate_random_value("bds", "BDS"))
+        random_bds_btn.clicked.connect(lambda: self._generate_random_value("bds", "BDS", self.inputs, self.log_message))
         bds_layout.addWidget(random_bds_btn)
         grid_layout.addWidget(QLabel("北斗号:"), 2, 0, Qt.AlignRight)
         grid_layout.addLayout(bds_layout, 2, 1)
 
-        # grid_layout.addWidget(QLabel("北斗号:"), 2, 0, Qt.AlignRight)
-        # grid_layout.addWidget(self.inputs["beidouId"], 2, 1)
         grid_layout.addWidget(QLabel("船舶类型:"), 2, 2, Qt.AlignRight)
         grid_layout.addWidget(self.inputs["shiptype"], 2, 3)
 
@@ -456,59 +504,6 @@ class MainWindow(QWidget):
         group_box.setLayout(grid_layout)
         return group_box
 
-    def create_ais_static_info_group(self):
-        """创建“AIS静态信息”模块的 GroupBox"""
-        group_box = QGroupBox("AIS静态信息")
-        grid_layout = QGridLayout()
-        grid_layout.setSpacing(10)
-
-        # 初始化该模块的控件
-        self.inputs.update({
-            "nationality": QLineEdit(), "imo": QLineEdit(), 
-            "callSign": QLineEdit(), "shipWidth": QLineEdit(), 
-            "draught": QLineEdit(), "heading": QLineEdit(), 
-            "eta": QLineEdit(), "destination": QLineEdit()
-        })
-
-        # --- 添加控件到网格布局 ---
-        grid_layout.addWidget(QLabel("IMO:"), 0, 0, Qt.AlignRight)
-        grid_layout.addWidget(self.inputs["imo"], 0, 1)
-        grid_layout.addWidget(QLabel("呼号:"), 0, 2, Qt.AlignRight)
-        grid_layout.addWidget(self.inputs["callSign"], 0, 3)
-
-        # 船宽输入框带单位
-        len_layout = QHBoxLayout()
-        len_layout.addWidget(self.inputs["shipWidth"])
-        len_layout.addWidget(QLabel("米"))
-        grid_layout.addWidget(QLabel("船宽:"), 1, 0, Qt.AlignRight)
-        grid_layout.addLayout(len_layout, 1, 1)
-
-        # 吃水输入框带单位
-        len_layout = QHBoxLayout()
-        len_layout.addWidget(self.inputs["draught"])
-        len_layout.addWidget(QLabel("米"))
-        grid_layout.addWidget(QLabel("吃水:"), 1, 2, Qt.AlignRight)
-        grid_layout.addLayout(len_layout, 1, 3)
-
-        # 艏向输入框带单位
-        len_layout = QHBoxLayout()
-        len_layout.addWidget(self.inputs["heading"])
-        len_layout.addWidget(QLabel("度"))
-        grid_layout.addWidget(QLabel("艏向:"), 2, 0, Qt.AlignRight)
-        grid_layout.addLayout(len_layout, 2, 1)
-
-        grid_layout.addWidget(QLabel("预到时间:"), 2, 2, Qt.AlignRight)
-        grid_layout.addWidget(self.inputs["eta"], 2, 3)
-
-        grid_layout.addWidget(QLabel("船籍:"), 3, 0, Qt.AlignRight)
-        grid_layout.addWidget(self.inputs["nationality"], 3, 1)
-
-        grid_layout.addWidget(QLabel("目的地:"), 3, 2, Qt.AlignRight)
-        grid_layout.addWidget(self.inputs["destination"], 3, 3)
-
-        group_box.setLayout(grid_layout)
-        return group_box
-
     def create_source_input_group(self):
         """创建信息源文本输入模块"""
         group_box = QGroupBox("信息源")
@@ -535,7 +530,6 @@ class MainWindow(QWidget):
         group_box = QGroupBox("控制与操作")
         v_layout = QVBoxLayout()
 
-
         # 发送频率设置
         freq_layout = QHBoxLayout()
         freq_layout.addWidget(QLabel("发送频率（秒/次）"))
@@ -547,29 +541,20 @@ class MainWindow(QWidget):
 
         # 方向控制
         control_layout = QGridLayout()
-        control_layout.setSpacing(5) # 减小按钮间距
+        control_layout.setSpacing(5)
+        up_btn, down_btn, left_btn, right_btn = QPushButton("↑"), QPushButton("↓"), QPushButton("←"), QPushButton("→")
+        up_left_btn, up_right_btn, down_left_btn, down_right_btn = QPushButton("↖"), QPushButton("↗"), QPushButton("↙"), QPushButton("↘")
+        
+        up_btn.clicked.connect(lambda: self.update_course_from_button(0, self.inputs))
+        down_btn.clicked.connect(lambda: self.update_course_from_button(180, self.inputs))
+        left_btn.clicked.connect(lambda: self.update_course_from_button(270, self.inputs))
+        right_btn.clicked.connect(lambda: self.update_course_from_button(90, self.inputs))
+        up_left_btn.clicked.connect(lambda: self.update_course_from_button(315, self.inputs))
+        up_right_btn.clicked.connect(lambda: self.update_course_from_button(45, self.inputs))
+        down_left_btn.clicked.connect(lambda: self.update_course_from_button(225, self.inputs))
+        down_right_btn.clicked.connect(lambda: self.update_course_from_button(135, self.inputs))
 
-        # 创建按钮
-        up_btn = QPushButton("↑")
-        down_btn = QPushButton("↓")
-        left_btn = QPushButton("←")
-        right_btn = QPushButton("→")
-        up_left_btn = QPushButton("↖")
-        up_right_btn = QPushButton("↗")
-        down_left_btn = QPushButton("↙")
-        down_right_btn = QPushButton("↘")
-
-        # 连接信号
-        up_btn.clicked.connect(lambda: self.update_course_from_button(0))
-        down_btn.clicked.connect(lambda: self.update_course_from_button(180))
-        left_btn.clicked.connect(lambda: self.update_course_from_button(270))
-        right_btn.clicked.connect(lambda: self.update_course_from_button(90))
-        up_left_btn.clicked.connect(lambda: self.update_course_from_button(315))
-        up_right_btn.clicked.connect(lambda: self.update_course_from_button(45))
-        down_left_btn.clicked.connect(lambda: self.update_course_from_button(225))
-        down_right_btn.clicked.connect(lambda: self.update_course_from_button(135))
-
-        # 设置样式
+        # ... (styling and layout remains the same)
         cardinal_style = "background-color: #E0E0E0; font-weight: bold;"
         diagonal_style = "background-color: #D0E8FF; font-weight: bold;"
         up_btn.setStyleSheet(cardinal_style)
@@ -580,8 +565,6 @@ class MainWindow(QWidget):
         up_right_btn.setStyleSheet(diagonal_style)
         down_left_btn.setStyleSheet(diagonal_style)
         down_right_btn.setStyleSheet(diagonal_style)
-
-        # 添加到布局
         control_layout.addWidget(up_left_btn, 0, 0)
         control_layout.addWidget(up_btn, 0, 1)
         control_layout.addWidget(up_right_btn, 0, 2)
@@ -590,41 +573,183 @@ class MainWindow(QWidget):
         control_layout.addWidget(down_left_btn, 2, 0)
         control_layout.addWidget(down_btn, 2, 1)
         control_layout.addWidget(down_right_btn, 2, 2)
-        
         v_layout.addLayout(control_layout)
 
         # 操作按钮
         button_layout = QHBoxLayout()
         self.start_pause_btn = QPushButton("开始发送")
-        self.start_pause_btn.setObjectName("StartButton")
         self.start_pause_btn.clicked.connect(self.toggle_sending_state)
         self.terminate_btn = QPushButton("终止发送")
-        self.terminate_btn.setObjectName("StopButton")
         self.terminate_btn.clicked.connect(self.terminate_sending)
         self.terminate_btn.setEnabled(False)
-        self.clear_btn = QPushButton("清除")
-        self.clear_btn.clicked.connect(self.clear_inputs)
-        self.assemble_btn = QPushButton("组装并预览")
-        self.assemble_btn.clicked.connect(self.assemble_and_preview)
+        clear_btn = QPushButton("清除")
+        clear_btn.clicked.connect(self.clear_inputs)
+        assemble_btn = QPushButton("组装并预览")
+        assemble_btn.clicked.connect(self.assemble_and_preview)
 
         button_layout.addWidget(self.start_pause_btn)
         button_layout.addWidget(self.terminate_btn)
-        button_layout.addWidget(self.clear_btn)
+        button_layout.addWidget(clear_btn)
         v_layout.addLayout(button_layout)
-
-        # Add the new assemble button in a new row
-        assemble_layout = QHBoxLayout()
-        assemble_layout.addWidget(self.assemble_btn)
-        v_layout.addLayout(assemble_layout)
+        v_layout.addWidget(assemble_btn)
         
         group_box.setLayout(v_layout)
         return group_box
 
-    def _generate_random_value(self, field_key, field_name_for_log):
+    # ===================================================================
+    # 静态信息 - UI 创建 (DUPLICATED)
+    # ===================================================================
+
+    def create_ais_static_info_group_static(self):
+        group_box = QGroupBox("AIS静态信息")
+        grid_layout = QGridLayout()
+        grid_layout.setSpacing(10)
+
+        # Initialize the controls for the static tab, ensuring all fields used in send_static_data exist.
+        self.static_inputs = {
+            "eTargetType": QComboBox(), "vesselName": QLineEdit(), "id": QLineEdit(),
+            "mmsi": QLineEdit(), "bds": QLineEdit(), "shiptype": QComboBox(),
+            "course": QLineEdit(), "speed": QLineEdit(), "longitude": QLineEdit(),
+            "latitude": QLineEdit(), "len": QLineEdit(), "maxLength": QLineEdit(),
+            "sost": QComboBox(), "dataStatus": QComboBox(), "province": QComboBox(),
+            "radarSource": QLineEdit(), "aisSource": QLineEdit(), "bdSource": QLineEdit(),
+            "callSign": QLineEdit(), "imo": QLineEdit(), "shipWidth": QLineEdit(),
+            "draught": QLineEdit(), "destination": QLineEdit(),
+            "eta": QDateTimeEdit(QDateTime.currentDateTime()),  # Using QDateTimeEdit for better UX
+            "nationality": QLineEdit(),
+            # Add missing fields that are used in the UI
+            "deviceCategory": QComboBox(),
+            "heading": QLineEdit(),
+        }
+
+        # Populate combo boxes to avoid errors on access
+        for text, value in self.config['ui_options']['eTargetType'].items():
+            self.static_inputs['eTargetType'].addItem(text, value)
+        for text, value in self.config['ui_options']['shiptype'].items():
+            self.static_inputs['shiptype'].addItem(text, value)
+        for text, value in self.config['ui_options']['sost'].items():
+            self.static_inputs['sost'].addItem(text, value)
+        for text, value in self.config['ui_options']['dataStatus'].items():
+            self.static_inputs['dataStatus'].addItem(text, value)
+        if self.config['ui_options'].get('province'):
+            for text, value in self.config['ui_options']['province'].items():
+                self.static_inputs['province'].addItem(text, value)
+
+        # Configure ETA input
+        self.static_inputs["eta"].setDisplayFormat("yyyy-MM-dd HH:mm:ss")
+        self.static_inputs["eta"].setCalendarPopup(True)
+
+        # Add default item for deviceCategory
+        self.static_inputs['deviceCategory'].addItem("默认分类")
+
+
+        # --- 添加控件到网格布局 ---
+        logger = lambda msg: self.log_message(msg, 'static')
+
+        # Row 0: MMSI and Vessel Name (Essential for static info)
+        mmsi_layout = QHBoxLayout()
+        mmsi_layout.addWidget(self.static_inputs["mmsi"])
+        random_mmsi_btn = QPushButton("随机")
+        random_mmsi_btn.clicked.connect(lambda: self._generate_random_value("mmsi", "MMSI", self.static_inputs, logger))
+        mmsi_layout.addWidget(random_mmsi_btn)
+        grid_layout.addWidget(QLabel("MMSI:"), 0, 0, Qt.AlignRight)
+        grid_layout.addLayout(mmsi_layout, 0, 1)
+
+        grid_layout.addWidget(QLabel("船名:"), 0, 2, Qt.AlignRight)
+        grid_layout.addWidget(self.static_inputs["vesselName"], 0, 3)
+
+        # Row 1: Device Category and Nationality
+        grid_layout.addWidget(QLabel("设备分类:"), 1, 0, Qt.AlignRight)
+        grid_layout.addWidget(self.static_inputs["deviceCategory"], 1, 1)
+        grid_layout.addWidget(QLabel("船籍:"), 1, 2, Qt.AlignRight)
+        grid_layout.addWidget(self.static_inputs["nationality"], 1, 3)
+
+        # Row 2: IMO and Call Sign
+        grid_layout.addWidget(QLabel("IMO:"), 2, 0, Qt.AlignRight)
+        grid_layout.addWidget(self.static_inputs["imo"], 2, 1)
+        grid_layout.addWidget(QLabel("呼号:"), 2, 2, Qt.AlignRight)
+        grid_layout.addWidget(self.static_inputs["callSign"], 2, 3)
+
+        # Row 3: Ship Length, Width
+        len_layout = QHBoxLayout()
+        len_layout.addWidget(self.static_inputs["len"])
+        len_layout.addWidget(QLabel("米"))
+        grid_layout.addWidget(QLabel("船长:"), 3, 0, Qt.AlignRight)
+        grid_layout.addLayout(len_layout, 3, 1)
+
+        width_layout = QHBoxLayout()
+        width_layout.addWidget(self.static_inputs["shipWidth"])
+        width_layout.addWidget(QLabel("米"))
+        grid_layout.addWidget(QLabel("船宽:"), 3, 2, Qt.AlignRight)
+        grid_layout.addLayout(width_layout, 3, 3)
+
+        # Row 4: Draught and Heading
+        draught_layout = QHBoxLayout()
+        draught_layout.addWidget(self.static_inputs["draught"])
+        draught_layout.addWidget(QLabel("米"))
+        grid_layout.addWidget(QLabel("吃水:"), 4, 0, Qt.AlignRight)
+        grid_layout.addLayout(draught_layout, 4, 1)
+
+        heading_layout = QHBoxLayout()
+        heading_layout.addWidget(self.static_inputs["heading"])
+        heading_layout.addWidget(QLabel("度"))
+        grid_layout.addWidget(QLabel("艏向:"), 4, 2, Qt.AlignRight)
+        grid_layout.addLayout(heading_layout, 4, 3)
+
+        # Row 5: ETA and Ship Type
+        grid_layout.addWidget(QLabel("预到时间:"), 5, 0, Qt.AlignRight)
+        grid_layout.addWidget(self.static_inputs["eta"], 5, 1)
+        
+        grid_layout.addWidget(QLabel("船舶类型:"), 5, 2, Qt.AlignRight)
+        grid_layout.addWidget(self.static_inputs["shiptype"], 5, 3)
+
+        # Row 6: Destination
+        grid_layout.addWidget(QLabel("目的地:"), 6, 0, Qt.AlignRight)
+        grid_layout.addWidget(self.static_inputs["destination"], 6, 1, 1, 3)
+
+        group_box.setLayout(grid_layout)
+        return group_box
+
+    def create_control_group_static(self):
+        group_box = QGroupBox("控制与操作")
+        v_layout = QVBoxLayout()
+        freq_layout = QHBoxLayout()
+        freq_layout.addWidget(QLabel("发送频率（秒/次）"))
+        self.static_frequency_input = QLineEdit("3")
+        self.static_frequency_input.setFixedWidth(50)
+        freq_layout.addWidget(self.static_frequency_input)
+        freq_layout.addStretch()
+        v_layout.addLayout(freq_layout)
+
+        button_layout = QHBoxLayout()
+        self.static_start_pause_btn = QPushButton("开始发送")
+        self.static_start_pause_btn.clicked.connect(self.toggle_sending_state_static)
+        self.static_terminate_btn = QPushButton("终止发送")
+        self.static_terminate_btn.clicked.connect(self.terminate_sending_static)
+        self.static_terminate_btn.setEnabled(False)
+        clear_btn = QPushButton("清除")
+        clear_btn.clicked.connect(self.clear_inputs_static)
+        assemble_btn = QPushButton("组装并预览")
+        assemble_btn.clicked.connect(self.assemble_and_preview_static)
+        button_layout.addWidget(self.static_start_pause_btn)
+        button_layout.addWidget(self.static_terminate_btn)
+        button_layout.addWidget(clear_btn)
+        v_layout.addLayout(button_layout)
+        v_layout.addWidget(assemble_btn)
+        group_box.setLayout(v_layout)
+        return group_box
+
+    # ===================================================================
+    # 通用及实时目标 - 逻辑
+    # ===================================================================
+
+    def _generate_random_value(self, field_key, field_name_for_log, inputs_dict, logger):
         """
         根据配置文件中的规则生成一个随机值。
         :param field_key: 在 self.inputs 和 config 中使用的键（如 'id', 'mmsi'）
         :param field_name_for_log: 在日志中显示的名称（如 'ID', 'MMSI'）
+        :param inputs_dict: 要操作的输入控件字典 (self.inputs 或 self.static_inputs)
+        :param logger: The logging function to use.
         """
         try:
             config = self.config['random_generation'][field_key]
@@ -632,161 +757,48 @@ class MainWindow(QWidget):
             length = config.get('length', 9)
 
             if length <= len(prefix):
-                self.log_message(f"错误: {field_name_for_log} 配置的总长度({length})必须大于前缀'{prefix}'的长度。")
+                logger(f"错误: {field_name_for_log} 配置的总长度({length})必须大于前缀'{prefix}'的长度。")
                 return
 
             random_len = length - len(prefix)
             random_part = ''.join([str(random.randint(0, 9)) for _ in range(random_len)])
             new_value = prefix + random_part
             
-            self.inputs[field_key].setText(new_value)
-            self.log_message(f"已生成随机{field_name_for_log}: {new_value}")
+            inputs_dict[field_key].setText(new_value)
+            logger(f"已生成随机{field_name_for_log}: {new_value}")
 
         except KeyError:
-            self.log_message(f"错误: 在配置文件中未找到 '{field_key}' 的随机生成规则。")
+            logger(f"错误: 在配置文件中未找到 '{field_key}' 的随机生成规则。")
         except Exception as e:
-            self.log_message(f"生成随机{field_name_for_log}时出错: {e}")
+            logger(f"生成随机{field_name_for_log}时出错: {e}")
 
-    @pyqtSlot(int)
-    def update_course_from_button(self, angle):
-        self.inputs["course"].setText(str(angle))
+    def update_course_from_button(self, angle, inputs_dict):
+        inputs_dict["course"].setText(str(angle))
 
     @pyqtSlot()
     def recognize_and_fill(self):
-        """
-        解析粘贴的文本并填充到UI控件中。
-        """
-        content = self.paste_input.toPlainText()
-        if not content: return
-        
-        # 映射关系：UI标签 -> 内部字段名
-        label_map = {
-            "目标类型": "eTargetType", "船名": "vesselName", "ID": "id", "MMSI": "mmsi",
-            "北斗号": "bds", "船舶类型": "shiptype", "航向": "course", "航速": "speed",
-            "经度": "longitude", "纬度": "latitude", "船长": "len", "最大船长": "maxLength",
-            "目标状态": "sost", "数据状态": "dataStatus", "设备分类": "deviceCategory",
-            "船籍": "nationality", "IMO": "imo", "呼号": "callSign", "船宽": "shipWidth",
-            "吃水": "draught", "艏向": "heading", "预到时间": "eta", "目的地": "destination",
-            "AIS信息源":"aisSource","北斗信息源":"bdSource","雷达信息源":"radarSource","省份":"province"
-        }
-        
-        # 需要特殊处理（只提取数字）的字段
-        numeric_fields = {
-            "course", "speed", "longitude", "latitude", "len", 
-            "maxLength", "shipWidth", "draught", "heading"
-        }
-
-        filled_fields = []
-        lines = content.splitlines()
-        for line in lines:
-            for label, field_name in label_map.items():
-                if label in line:
-                    # 提取冒号或标签后的值
-                    value_part = line.split(label, 1)[-1]
-                    value_part = value_part.lstrip(' :：').strip()
-
-                    # 如果是需要提取数字的字段
-                    if field_name in numeric_fields:
-                        # 使用正则表达式查找第一个出现的整数或浮点数
-                        match = re.search(r'[-+]?\d*\.?\d+', value_part)
-                        if match:
-                            raw_value = match.group(0)
-                        else:
-                            raw_value = "" # 如果没找到数字，则为空
-                    else:
-                        # 对于其他字段，取第一个空格前的内容
-                        raw_value = value_part.split()[0] if value_part else ""
-
-                    widget = self.inputs.get(field_name)
-                    if widget:
-                        if isinstance(widget, QLineEdit):
-                            widget.setText(raw_value)
-                        elif isinstance(widget, QComboBox):
-                            index = widget.findText(raw_value, Qt.MatchContains)
-                            if index != -1: widget.setCurrentIndex(index)
-                        filled_fields.append(field_name)
-                        break
-        
-        if filled_fields:
-            self.log_message(f"快速识别: 已填充字段 {', '.join(filled_fields)}")
-        else:
-            self.log_message("快速识别: 未找到可识别的数据。")
+        self._recognize_and_fill_generic(self.paste_input, self.inputs, self.log_message)
 
     @pyqtSlot()
     def clear_inputs(self):
-        """清除所有输入框和下拉列表到初始状态。"""
-        self.paste_input.clear()
-        for widget in self.inputs.values():
-            if isinstance(widget, QLineEdit):
-                widget.clear()
-            elif isinstance(widget, QComboBox):
-                widget.setCurrentIndex(0)
-        # 恢复 dataStatus 的默认锁定状态
-        if hasattr(self, 'data_status_checkbox'):
-            self.data_status_checkbox.setChecked(True)
+        self._clear_inputs_generic(self.paste_input, self.inputs, self.data_status_checkbox)
         self.log_message("所有输入已清除。")
 
     def toggle_sending_state(self):
-        """
-        切换发送状态：开始 -> 暂停 -> 继续
-        """
-        # 如果当前不在发送状态（包括初始状态和暂停状态）
-        if not self.sending_timer.isActive():
-            try:
-                # 获取频率值，并转换为毫秒
-                frequency_sec = float(self.frequency_input.text())
-                if frequency_sec <= 0:
-                    raise ValueError
-                interval_ms = int(frequency_sec * 1000)
-            except (ValueError, TypeError):
-                self.log_message("错误: 发送频率必须是一个大于0的数字。将使用默认值3秒。")
-                interval_ms = 3000
-                self.frequency_input.setText("3")
-
-            # 如果是初始状态
-            if not self.terminate_btn.isEnabled():
-                self.log_message(f"开始发送数据... (频率: {interval_ms / 1000}s/次)")
-                self.send_data() # 立即发送一次
-            else: # 如果是暂停后继续
-                self.log_message(f"继续发送数据... (频率: {interval_ms / 1000}s/次)")
-            
-            self.sending_timer.start(interval_ms)
-            self.start_pause_btn.setText("暂停发送")
-            self.terminate_btn.setEnabled(True)
-            self.frequency_input.setEnabled(False) # 发送期间禁止修改频率
-        # 如果当前正在发送
-        else:
-            self.sending_timer.stop()
-            self.log_message("已暂停发送数据。")
-            self.start_pause_btn.setText("继续发送")
-            self.frequency_input.setEnabled(True) # 暂停时允许修改频率
+        self._toggle_sending_state_generic(self.sending_timer, self.frequency_input, self.start_pause_btn, self.terminate_btn, self.send_data, self.log_message)
 
     def terminate_sending(self):
-        """
-        终止发送流程，并重置按钮状态。
-        """
-        self.sending_timer.stop()
-        self.log_message("已终止发送数据。")
-        self.start_pause_btn.setText("开始发送")
-        self.terminate_btn.setEnabled(False)
-        self.frequency_input.setEnabled(True) # 终止时允许修改频率
+        self._terminate_sending_generic(self.sending_timer, self.frequency_input, self.start_pause_btn, self.terminate_btn, self.log_message)
 
     def toggle_data_status_lock(self, is_checked):
-        """
-        根据复选框状态，启用/禁用数据状态下拉列表。
-        """
-        if is_checked:
-            self.inputs["dataStatus"].setCurrentIndex(-1) # 清除选择，显示为空
-            self.inputs["dataStatus"].setEnabled(False)
-        else:
-            self.inputs["dataStatus"].setEnabled(True)
-            self.inputs["dataStatus"].setCurrentIndex(0) # 默认选中第一个有效项 "new"
+        self._toggle_data_status_lock_generic(is_checked, self.inputs["dataStatus"])
 
     def get_field_value(self, field_name, value_type=str, default_value=None):
         """安全地从控件获取值并进行类型转换。"""
         if default_value is None:
             default_value = value_type()
 
+        # Note: This method now only works for the realtime tab's `self.inputs`
         widget = self.inputs.get(field_name)
         if not widget: return default_value
 
@@ -794,10 +806,9 @@ class MainWindow(QWidget):
         if isinstance(widget, QLineEdit):
             text = widget.text()
         elif isinstance(widget, QComboBox):
-            # 如果是 dataStatus 且其复选框被勾选（或索引无效），则跳过取值
             if field_name == "dataStatus" and (self.data_status_checkbox.isChecked() or widget.currentIndex() == -1):
                 return default_value
-            text = widget.currentText() # 使用文本值进行转换
+            text = widget.currentText()
 
         if not text: return default_value
         try:
@@ -808,115 +819,322 @@ class MainWindow(QWidget):
 
     def send_data(self):
         """
-        核心函数：收集UI数据，构建protobuf和JSON消息，并分别调用Kafka生产者发送。
+        核心函数：收集实时目标UI数据，构建protobuf和JSON消息，并分别调用Kafka生产者发送。
         """
         try:
             # --- 1. 发送 Protobuf 消息 ---
-            self.send_proto_message()
+            target_list = target_pb2.TargetProtoList()
+            target = target_list.list.add()
+
+            target.id = self.get_field_value("id", int, 0)
+            target.lastTm = int(time.time() * 1000)
+            target.sost = self.inputs['sost'].currentData()
+            target.eTargetType = self.inputs['eTargetType'].currentData()
+            if self.inputs['province'].currentIndex() > 0:
+                target.adapterId = self.inputs['province'].currentData()
+            if not self.data_status_checkbox.isChecked() and self.inputs['dataStatus'].currentIndex() != -1:
+                target.status = self.inputs['dataStatus'].currentData()
+            
+            pos_info = target.pos
+            pos_info.id = target.id
+            pos_info.mmsi = self.get_field_value("mmsi", int, 0)
+            pos_info.vesselName = self.get_field_value("vesselName")
+            pos_info.speed = self.get_field_value("speed", float, 0.0)
+            pos_info.course = self.get_field_value("course", float, 0.0)
+            pos_info.len = self.get_field_value("len", int, 0)
+            pos_info.shiptype = self.inputs['shiptype'].currentData()
+            pos_info.geoPtn.longitude = self.get_field_value("longitude", float, 0.0)
+            pos_info.geoPtn.latitude = self.get_field_value("latitude", float, 0.0)
+
+            if self.inputs["radarSource"].text():
+                source = target.sources.add(); source.provider = "雷达"; source.type = "RADAR"; source.ids.append(self.inputs["radarSource"].text())
+            if self.inputs["aisSource"].text():
+                source = target.sources.add(); source.provider = "AIS"; source.type = "AIS"; source.ids.append(self.inputs["aisSource"].text())
+            if self.inputs["bdSource"].text():
+                source = target.sources.add(); source.provider = "北斗"; source.type = "BEIDOU"; source.ids.append(self.inputs["bdSource"].text())
+
+            self.log_message("构造的 Protobuf 消息内容:\n" + str(target).strip())
+            pb_data = target_list.SerializeToString()
+            topic = self.config['kafka']['topic']
+            self.kafka_producer.send_message(topic, pb_data)
+            self.log_message(f"已向 Topic '{topic}' 发送 Protobuf 消息。")
 
             # --- 2. 发送 AIS 静态信息 JSON ---
-            self.send_ais_static_json()
+            mmsi = self.get_field_value("mmsi")
+            if mmsi:
+                ais_info = {
+                    "MMSI": mmsi, "Vessel Name": self.get_field_value("vesselName"), "Call_Sign": self.get_field_value("callSign"),
+                    "IMO": self.get_field_value("imo"), "Ship Type": self.inputs["shiptype"].currentText(),
+                    "LengthRealTime": self.get_field_value("len"), "Wide": self.get_field_value("shipWidth"),
+                    "draught": self.get_field_value("draught"), "Destination": self.get_field_value("destination"),
+                    "etaTime": self.get_field_value("eta"), "Nationality": self.get_field_value("nationality"),
+                    "Ship Class": "A", "extInfo": None
+                }
+                json_payload = {"AisExts": [ais_info]}
+                json_data = json.dumps(json_payload, ensure_ascii=False, indent=2)
+                self.log_message("构造的 JSON 消息内容:\n" + json_data)
+                static_topic = self.config['kafka'].get('ais_static_topic')
+                if static_topic:
+                    self.kafka_producer.send_message(static_topic, json_data.encode('utf-8'))
+                    self.log_message(f"已向 Topic '{static_topic}' 发送 JSON 消息。")
+                else:
+                    self.log_message("警告: 在 config.json 中未找到 'ais_static_topic'。")
+            else:
+                self.log_message("信息: MMSI为空，跳过发送AIS静态信息JSON。")
 
         except Exception as e:
             self.log_message(f"发送过程中发生严重错误: {e}")
 
-    def send_proto_message(self):
-        """构建并发送主要的目标Protobuf消息。"""
-        target_list = target_pb2.TargetProtoList()
-        target = target_list.list.add()
+    # ===================================================================
+    # 静态信息 - 逻辑 (DUPLICATED)
+    # ===================================================================
 
-        # --- 填充 Protobuf 消息 ---
-        target.id = self.get_field_value("id", int, 0)
-        target.lastTm = int(time.time() * 1000) # 总是使用当前时间戳
-        
-        target.sost = self.inputs['sost'].currentData()
-        target.eTargetType = self.inputs['eTargetType'].currentData()
-        if self.inputs['province'].currentIndex() > 0: # 仅当选择了有效省份时才赋值
-            target.adapterId = self.inputs['province'].currentData()
+    @pyqtSlot()
+    def recognize_and_fill_static(self):
+        logger = lambda msg: self.log_message(msg, 'static')
+        self._recognize_and_fill_generic(self.static_paste_input, self.static_inputs, logger)
 
-        # 处理数据状态，仅当复选框未勾选且有有效选择时才赋值
-        if not self.data_status_checkbox.isChecked() and self.inputs['dataStatus'].currentIndex() != -1:
-            target.status = self.inputs['dataStatus'].currentData()
-        
-        pos_info = target.pos
-        pos_info.id = target.id
-        pos_info.mmsi = self.get_field_value("mmsi", int, 0)
-        pos_info.vesselName = self.get_field_value("vesselName")
-        pos_info.speed = self.get_field_value("speed", float, 0.0)
-        pos_info.course = self.get_field_value("course", float, 0.0)
-        pos_info.len = self.get_field_value("len", int, 0)
-        pos_info.shiptype = self.inputs['shiptype'].currentData()
-        
-        geo_ptn = pos_info.geoPtn
-        geo_ptn.longitude = self.get_field_value("longitude", float, 0.0)
-        geo_ptn.latitude = self.get_field_value("latitude", float, 0.0)
+    @pyqtSlot()
+    def clear_inputs_static(self):
+        self._clear_inputs_generic(self.static_paste_input, self.static_inputs, None) # No checkbox for static tab
+        self.log_message("所有输入已清除 (静态)。", "static")
 
-        # 根据文本框内容添加 source
-        if self.inputs["radarSource"].text():
-            source = target.sources.add()
-            source.provider = "雷达"
-            source.type = "RADAR"
-            source.ids.append(self.inputs["radarSource"].text())
-        if self.inputs["aisSource"].text():
-            source = target.sources.add()
-            source.provider = "AIS"
-            source.type = "AIS"
-            source.ids.append(self.inputs["aisSource"].text())
-        if self.inputs["bdSource"].text():
-            source = target.sources.add()
-            source.provider = "北斗"
-            source.type = "BEIDOU"
-            source.ids.append(self.inputs["bdSource"].text())
+    def toggle_sending_state_static(self):
+        # Pass the correct logger to the generic function
+        logger = lambda msg: self.log_message(msg, 'static')
+        self._toggle_sending_state_generic(self.static_sending_timer, self.static_frequency_input, self.static_start_pause_btn, self.static_terminate_btn, self.send_static_data, logger)
 
-        self.log_message("构造的 Protobuf 消息内容:\n" + str(target).strip())
+    def terminate_sending_static(self):
+        # Pass the correct logger to the generic function
+        logger = lambda msg: self.log_message(msg, 'static')
+        self._terminate_sending_generic(self.static_sending_timer, self.static_frequency_input, self.static_start_pause_btn, self.static_terminate_btn, logger)
 
-        pb_data = target_list.SerializeToString()
-        
-        topic = self.config['kafka']['topic']
-        self.kafka_producer.send_message(topic, pb_data)
-        self.log_message(f"已向 Topic '{topic}' 发送 Protobuf 消息。")
+    def toggle_data_status_lock_static(self, is_checked):
+        self._toggle_data_status_lock_generic(is_checked, self.static_inputs["dataStatus"])
 
-    def send_ais_static_json(self):
-        """构建并发送AIS静态信息的JSON消息。"""
-        mmsi = self.get_field_value("mmsi")
-        if not mmsi:
-            self.log_message("信息: MMSI为空，跳过发送AIS静态信息JSON。")
-            return
+    def send_static_data(self):
+        """
+        核心函数：收集静态信息UI数据，构建并发送AIS静态信息JSON。
+        """
+        try:
+            # Helper to get value from the static inputs dict
+            def get_static_val(field_name, value_type=str, default_value=None):
+                if default_value is None:
+                    default_value = value_type()
+                widget = self.static_inputs.get(field_name)
+                if not widget:
+                    return default_value
+                
+                text = ""
+                if isinstance(widget, QLineEdit):
+                    text = widget.text()
+                elif isinstance(widget, QComboBox):
+                    if widget.currentIndex() == -1:
+                        return default_value
+                    text = widget.currentText()
+                elif isinstance(widget, QDateTimeEdit):
+                    text = widget.dateTime().toString("yyyy-MM-dd HH:mm:ss")
 
-        # 根据UI输入构建字典
-        ais_info = {
-            "MMSI": mmsi,
-            "Vessel Name": self.get_field_value("vesselName"),
-            "Call_Sign": self.get_field_value("callSign"),
-            "IMO": self.get_field_value("imo"),
-            "Ship Type": self.inputs["shiptype"].currentText(),
-            "LengthRealTime": self.get_field_value("len"),
-            "Wide": self.get_field_value("shipWidth"),
-            "draught": self.get_field_value("draught"),
-            "Destination": self.get_field_value("destination"),
-            "etaTime": self.get_field_value("eta"),
-            "Nationality": self.get_field_value("nationality"),
-            "Ship Class": "A", # 默认为A类
-            "extInfo": None
-            # 示例中的其他字段如 "A (to Bow)" 等没有对应UI，因此省略
-        }
+                if not text:
+                    return default_value
+                try:
+                    return value_type(text)
+                except (ValueError, KeyError):
+                    self.log_message(f"警告: 字段 '{field_name}' 的值 '{text}' 无效。使用默认值。", "static")
+                    return default_value
 
-        # 包装在顶层结构中
-        json_payload = {"AisExts": [ais_info]}
-        
-        # 转换为JSON字符串
-        json_data = json.dumps(json_payload, ensure_ascii=False, indent=2)
-        
-        self.log_message("构造的 JSON 消息内容:\n" + json_data)
+            # --- 发送 AIS 静态信息 JSON ---
+            mmsi_val = get_static_val("mmsi")
+            if mmsi_val:
+                ais_info = {
+                    "MMSI": mmsi_val,
+                    "Vessel Name": get_static_val("vesselName"),
+                    "Call_Sign": get_static_val("callSign"),
+                    "IMO": get_static_val("imo"),
+                    "Ship Type": self.static_inputs["shiptype"].currentText(),
+                    "LengthRealTime": get_static_val("len", int, 0),
+                    "Wide": get_static_val("shipWidth", int, 0),
+                    "draught": get_static_val("draught", float, 0.0),
+                    "Destination": get_static_val("destination"),
+                    "etaTime": get_static_val("eta"),
+                    "Nationality": get_static_val("nationality"),
+                    "Ship Class": "A",  # Default value
+                    "extInfo": None
+                }
+                json_payload = {"AisExts": [ais_info]}
+                json_data = json.dumps(json_payload, ensure_ascii=False, indent=2)
+                self.log_message("(静态) 构造的 JSON 消息内容:\n" + json_data, "static")
+                static_topic = self.config['kafka'].get('ais_static_topic')
+                if static_topic:
+                    self.kafka_producer.send_message(static_topic, json_data.encode('utf-8'))
+                    self.log_message(f"(静态) 已向 Topic '{static_topic}' 发送 JSON 消息。", "static")
+                else:
+                    self.log_message("警告: 在 config.json 中未找到 'ais_static_topic'。", "static")
+            else:
+                self.log_message("信息: (静态) MMSI为空，跳过发送。", "static")
 
-        # 发送到指定的Topic
-        topic = self.config['kafka'].get('ais_static_topic')
-        if not topic:
-            self.log_message("警告: 在 config.json 中未找到 'ais_static_topic'，无法发送JSON消息。")
-            return
+        except Exception as e:
+            self.log_message(f"发送静态信息过程中发生严重错误: {e}", "static")
+
+    # ===================================================================
+    # 通用逻辑实现
+    # ===================================================================
+
+    def _recognize_and_fill_generic(self, paste_widget, inputs_dict, logger):
+        content = paste_widget.toPlainText()
+        if not content: return
+        label_map = { "目标类型": "eTargetType", "船名": "vesselName", "ID": "id", "MMSI": "mmsi", "北斗号": "bds", "船舶类型": "shiptype", "航向": "course", "航速": "speed", "经度": "longitude", "纬度": "latitude", "船长": "len", "最大船长": "maxLength", "目标状态": "sost", "数据状态": "dataStatus", "设备分类": "deviceCategory", "船籍": "nationality", "IMO": "imo", "呼号": "callSign", "船宽": "shipWidth", "吃水": "draught", "艏向": "heading", "预到时间": "eta", "目的地": "destination", "AIS信息源":"aisSource","北斗信息源":"bdSource","雷达信息源":"radarSource","省份":"province" }
+        numeric_fields = { "course", "speed", "longitude", "latitude", "len", "maxLength", "shipWidth", "draught", "heading" }
+        filled_fields = []
+        for line in content.splitlines():
+            for label, field_name in label_map.items():
+                if label in line:
+                    value_part = line.split(label, 1)[-1].lstrip(' :：').strip()
+                    raw_value = re.search(r'[-+]?\d*\.?\d+', value_part).group(0) if field_name in numeric_fields and re.search(r'[-+]?\d*\.?\d+', value_part) else (value_part.split()[0] if value_part else "")
+                    widget = inputs_dict.get(field_name)
+                    if widget:
+                        if isinstance(widget, QLineEdit): widget.setText(raw_value)
+                        elif isinstance(widget, QComboBox):
+                            index = widget.findText(raw_value, Qt.MatchContains)
+                            if index != -1: widget.setCurrentIndex(index)
+                        elif isinstance(widget, QDateTimeEdit):
+                            # Attempt to parse date/time from recognized string
+                            try:
+                                dt = QDateTime.fromString(raw_value, "yyyy-MM-dd HH:mm:ss")
+                                if dt.isValid():
+                                    widget.setDateTime(dt)
+                            except:
+                                pass # Ignore if parsing fails
+                        filled_fields.append(field_name)
+                        break
+        logger(f"快速识别: 已填充字段 {', '.join(filled_fields)}" if filled_fields else "快速识别: 未找到可识别的数据。")
+
+    def _clear_inputs_generic(self, paste_widget, inputs_dict, checkbox):
+        if paste_widget:
+            paste_widget.clear()
+        for widget in inputs_dict.values():
+            if isinstance(widget, QLineEdit): widget.clear()
+            elif isinstance(widget, QComboBox): widget.setCurrentIndex(0)
+            elif isinstance(widget, QDateTimeEdit): widget.setDateTime(QDateTime.currentDateTime())
+        if checkbox: checkbox.setChecked(True)
+
+    def _toggle_sending_state_generic(self, timer, freq_input, start_btn, stop_btn, send_func, logger):
+        if not timer.isActive():
+            try:
+                interval_ms = int(float(freq_input.text()) * 1000)
+                if interval_ms <= 0: raise ValueError
+            except (ValueError, TypeError):
+                logger("错误: 发送频率必须是一个大于0的数字。将使用默认值3秒。")
+                interval_ms = 3000
+                freq_input.setText("3")
             
-        self.kafka_producer.send_message(topic, json_data.encode('utf-8'))
-        self.log_message(f"已向 Topic '{topic}' 发送 JSON 消息。")
+            log_msg = f"开始发送数据... (频率: {interval_ms / 1000}s/次)" if not stop_btn.isEnabled() else f"继续发送数据... (频率: {interval_ms / 1000}s/次)"
+            logger(log_msg)
+            if not stop_btn.isEnabled(): send_func()
+            
+            timer.start(interval_ms)
+            start_btn.setText("暂停发送")
+            stop_btn.setEnabled(True)
+            freq_input.setEnabled(False)
+        else:
+            timer.stop()
+            logger("已暂停发送数据。")
+            start_btn.setText("继续发送")
+            freq_input.setEnabled(True)
+
+    def _terminate_sending_generic(self, timer, freq_input, start_btn, stop_btn, logger):
+        timer.stop()
+        logger("已终止发送数据。")
+        start_btn.setText("开始发送")
+        stop_btn.setEnabled(False)
+        freq_input.setEnabled(True)
+
+    def _toggle_data_status_lock_generic(self, is_checked, data_status_combo):
+        if is_checked:
+            data_status_combo.setCurrentIndex(-1)
+            data_status_combo.setEnabled(False)
+        else:
+            data_status_combo.setEnabled(True)
+            data_status_combo.setCurrentIndex(0)
+
+    @pyqtSlot()
+    def assemble_and_preview(self):
+        self._assemble_and_preview_generic(self.inputs, self.data_status_checkbox, self.log_message)
+
+    @pyqtSlot()
+    def assemble_and_preview_static(self):
+        logger = lambda msg: self.log_message(msg, 'static')
+        self._assemble_and_preview_generic(self.static_inputs, None, logger)
+
+    def _assemble_and_preview_generic(self, inputs_dict, data_status_checkbox, logger):
+        """
+        从UI收集数据，使用data_assembler进行组装，
+        然后压缩��编码并显示结果，模拟发送。
+        """
+        try:
+            # Helper to get value from the correct inputs dict
+            def get_val(field_name, value_type=str, default_value=None):
+                # This helper is local and uses the passed-in inputs_dict
+                if default_value is None: default_value = value_type()
+                widget = inputs_dict.get(field_name)
+                if not widget: return default_value
+                text = ""
+                if isinstance(widget, QLineEdit):
+                    text = widget.text()
+                elif isinstance(widget, QComboBox):
+                    if data_status_checkbox and field_name == "dataStatus" and (data_status_checkbox.isChecked() or widget.currentIndex() == -1):
+                        return default_value
+                    text = widget.currentText()
+                elif isinstance(widget, QDateTimeEdit):
+                    text = widget.dateTime().toString("yyyy-MM-dd HH:mm:ss")
+
+                if not text: return default_value
+                try:
+                    return value_type(text)
+                except (ValueError, KeyError):
+                    return default_value
+
+            # 1. 从UI收集数据到一个字典
+            ui_data = {
+                "id": get_val("id"), "lastTm": int(time.time() * 1000),
+                "maxLen": get_val("maxLength", int, 0), "status": inputs_dict["dataStatus"].currentText().upper(),
+                "displayId": int(get_val("id") or 0) % 100000, "mmsi": int(get_val("mmsi") or 0),
+                "idR": 0, "state": inputs_dict['sost'].currentData(),
+                "adapterId": inputs_dict['province'].currentData(), "quality": 100,
+                "course": get_val("course", float, 0.0), "speed": get_val("speed", float, 0.0),
+                "heading": get_val("heading", float, 0.0), "len": get_val("len", int, 0),
+                "wid": get_val("shipWidth", int, 0), "shipType": inputs_dict['shiptype'].currentData(),
+                "flags": 0, "mMmsi": int(get_val("mmsi") or 0), "vesselName": get_val("vesselName"),
+                "latitude": get_val("latitude", float, 0.0), "longitude": get_val("longitude", float, 0.0),
+                "aisBaseInfo": { "Call_Sign": get_val("callSign"), "IMO": get_val("imo"), "Destination": get_val("destination") },
+                "sources": [], "fusionTargets": []
+            }
+            
+            if inputs_dict["radarSource"].text(): ui_data["sources"].append({"provider": "HLX", "type": "RADAR", "ids": [inputs_dict["radarSource"].text()]})
+            if inputs_dict["aisSource"].text(): ui_data["sources"].append({"provider": "HLX", "type": "AIS", "ids": [inputs_dict["aisSource"].text()]})
+
+            logger("从UI收集的数据:\n" + json.dumps(ui_data, indent=2, ensure_ascii=False))
+
+            proto_message = assemble_proto_from_data(ui_data)
+            logger("组装后的Protobuf消息:\n" + str(proto_message).strip())
+
+            serialized_data = proto_message.SerializeToString()
+            compressed_data = zlib.compress(serialized_data)
+            hex_output = binascii.hexlify(compressed_data).decode('ascii')
+            formatted_hex = ' '.join(hex_output[i:i+2] for i in range(0, len(hex_output), 2))
+            
+            logger("------ 组装、压缩、编码后的结果 (Hex) ------")
+            chunk_size = 32 * 3 - 1
+            for i in range(0, len(formatted_hex), chunk_size):
+                 logger(formatted_hex[i:i+chunk_size])
+            logger("-------------------------------------------------")
+
+        except Exception as e:
+            logger(f"组装过程中发生严重错误: {e}")
+
+    # ===================================================================
+    # 回放及其他
+    # ===================================================================
 
     def query_trajectory_data(self):
         """从查询构建器表格中读取所有行，并从数据库查询轨迹数据"""
@@ -1235,12 +1453,23 @@ class MainWindow(QWidget):
         self.trajectory_scene.addEllipse(lon - 0.001, lat - 0.001, 0.002, 0.002, pen, brush)
 
 
-    def log_message(self, message):
+    def log_message(self, message, tab='realtime'):
+        """Logs a message to the appropriate log display based on the tab."""
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
         log_entry = f"[{timestamp}] {message}"
-        if hasattr(self, 'log_display'):
-            self.log_display.append(log_entry)
-        print(log_entry)
+        
+        log_display_widget = None
+        # Determine the target log widget
+        if tab == 'static' and hasattr(self, 'static_log_display'):
+            log_display_widget = self.static_log_display
+        elif hasattr(self, 'log_display'): # Default to realtime
+            log_display_widget = self.log_display
+
+        if log_display_widget:
+            log_display_widget.append(log_entry)
+        
+        # Also print to console for debugging, prefixed with the tab name
+        print(f"({tab}) {log_entry}")
 
     def closeEvent(self, event):
         self.kafka_producer.close()
