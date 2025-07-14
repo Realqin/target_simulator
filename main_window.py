@@ -15,8 +15,11 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import pyqtSlot, QTimer, Qt, QDateTime
 from PyQt5.QtGui import QIcon, QCursor, QPen, QBrush, QColor, QPainter, QPainterPath
 
+import zlib
+import binascii
 from kafka_producer import KProducer
 import target_pb2
+from data_assembler import assemble_proto_from_data
 from database import Database
 
 
@@ -150,6 +153,13 @@ class MainWindow(QWidget):
         # --- 设置光标样式 ---
         self.set_cursors()
 
+        # --- 连接初始化按钮信号 ---
+        self.save_init_btn.clicked.connect(self.save_initial_target)
+        self.load_init_btn.clicked.connect(self.load_initial_target)
+
+        # --- 启动时尝试加载一次 ---
+        self.load_initial_target(is_silent=True)
+
     def setup_realtime_tab(self):
         """配置“实时目标”标签页的UI内容"""
         tab_layout = QHBoxLayout(self.realtime_tab)
@@ -177,6 +187,15 @@ class MainWindow(QWidget):
         # 创建并添加信息源模块
         left_v_layout.addWidget(self.create_source_input_group())
         left_v_layout.addStretch(1)
+
+        # --- 添加初始化按钮 ---
+        init_button_layout = QHBoxLayout()
+        self.save_init_btn = QPushButton("存为初始目标")
+        self.load_init_btn = QPushButton("一键初始化")
+        init_button_layout.addStretch(1)
+        init_button_layout.addWidget(self.save_init_btn)
+        init_button_layout.addWidget(self.load_init_btn)
+        left_v_layout.addLayout(init_button_layout)
 
         # --- 右侧布局 (包含控制操作和日志) ---
         right_v_layout = QVBoxLayout()
@@ -569,11 +588,18 @@ class MainWindow(QWidget):
         self.terminate_btn.setEnabled(False)
         self.clear_btn = QPushButton("清除")
         self.clear_btn.clicked.connect(self.clear_inputs)
+        self.assemble_btn = QPushButton("组装并预览")
+        self.assemble_btn.clicked.connect(self.assemble_and_preview)
 
         button_layout.addWidget(self.start_pause_btn)
         button_layout.addWidget(self.terminate_btn)
         button_layout.addWidget(self.clear_btn)
         v_layout.addLayout(button_layout)
+
+        # Add the new assemble button in a new row
+        assemble_layout = QHBoxLayout()
+        assemble_layout.addWidget(self.assemble_btn)
+        v_layout.addLayout(assemble_layout)
         
         group_box.setLayout(v_layout)
         return group_box
@@ -762,7 +788,7 @@ class MainWindow(QWidget):
 
             # --- 填充 Protobuf 消息 ---
             target.id = self.get_field_value("id", int, 0)
-            target.lastTm = int(time.time()) # 总是使用当前时间戳
+            target.lastTm = int(time.time() * 1000) # 总是使用当前时间戳
             
             target.sost = self.inputs['sost'].currentData()
             target.eTargetType = self.inputs['eTargetType'].currentData()
@@ -1140,5 +1166,128 @@ class MainWindow(QWidget):
         if self.db:
             self.db.close()
         event.accept()
+
+    @pyqtSlot()
+    def assemble_and_preview(self):
+        """
+        从UI收集数据，使用data_assembler进行组装，
+        然后压缩、编码并显示结果，模拟发送。
+        """
+        try:
+            # 1. 从UI收集数据到一个字典
+            ui_data = {
+                "id": self.get_field_value("id"),
+                "lastTm": int(time.time() * 1000), # 使用毫秒时间戳
+                "maxLen": self.get_field_value("maxLength", int, 0),
+                "status": self.inputs["dataStatus"].currentText().upper(),
+                "displayId": self.get_field_value("id", int, 0) % 100000, # 简单处理
+                "mmsi": self.get_field_value("mmsi", int, 0),
+                "idR": 0, # 暂无此输入
+                "state": self.inputs['sost'].currentData(),
+                "quality": 100, # 默认值
+                "course": self.get_field_value("course", float, 0.0),
+                "speed": self.get_field_value("speed", float, 0.0),
+                "heading": self.get_field_value("heading", float, 0.0),
+                "len": self.get_field_value("len", int, 0),
+                "wid": self.get_field_value("shipWidth", int, 0),
+                "shipType": self.inputs['shiptype'].currentData(),
+                "flags": 0, # 默认值
+                "mMmsi": self.get_field_value("mmsi", int, 0), # 假设与mmsi相同
+                "vesselName": self.get_field_value("vesselName"),
+                "latitude": self.get_field_value("latitude", float, 0.0),
+                "longitude": self.get_field_value("longitude", float, 0.0),
+                "aisBaseInfo": {
+                    "Call_Sign": self.get_field_value("callSign"),
+                    "IMO": self.get_field_value("imo"),
+                    "Destination": self.get_field_value("destination")
+                },
+                "sources": [],
+                "fusionTargets": []
+            }
+            
+            # 添加 sources
+            if self.inputs["radarSource"].text():
+                ui_data["sources"].append({
+                    "provider": "HLX", "type": "RADAR", "ids": [self.inputs["radarSource"].text()]
+                })
+            if self.inputs["aisSource"].text():
+                ui_data["sources"].append({
+                    "provider": "HLX", "type": "AIS", "ids": [self.inputs["aisSource"].text()]
+                })
+
+            self.log_message("从UI收集的数据:\n" + json.dumps(ui_data, indent=2, ensure_ascii=False))
+
+            # 2. 使用 data_assembler.py 中的函数进行组装
+            proto_message = assemble_proto_from_data(ui_data)
+            self.log_message("组装后的Protobuf消息:\n" + str(proto_message).strip())
+
+            # 3. 序列化 Protobuf 消息
+            serialized_data = proto_message.SerializeToString()
+
+            # 4. 使用 zlib 压缩
+            compressed_data = zlib.compress(serialized_data)
+
+            # 5. 转换为十六进制字符串以便显示
+            hex_output = binascii.hexlify(compressed_data).decode('ascii')
+            
+            # 格式化输出，每行显示32个字符（16个字节）
+            formatted_hex = ' '.join(hex_output[i:i+2] for i in range(0, len(hex_output), 2))
+            
+            self.log_message("------ 组装、压缩、编码后的结果 (Hex) ------")
+            # 为了更好的可读性，分行显示
+            chunk_size = 32 * 3 - 1 # 32个字节，每个字节2个hex字符+1个空格
+            for i in range(0, len(formatted_hex), chunk_size):
+                 self.log_message(formatted_hex[i:i+chunk_size])
+            self.log_message("-------------------------------------------------")
+
+
+        except Exception as e:
+            self.log_message(f"组装过程中发生严重错误: {e}")
+
+    @pyqtSlot()
+    def save_initial_target(self):
+        """将当前UI上的所有输入值保存到 initial_target.json 文件中。"""
+        try:
+            initial_data = {}
+            for name, widget in self.inputs.items():
+                if isinstance(widget, QLineEdit):
+                    initial_data[name] = widget.text()
+                elif isinstance(widget, QComboBox):
+                    initial_data[name] = widget.currentText()
+            
+            with open('initial_target.json', 'w', encoding='utf-8') as f:
+                json.dump(initial_data, f, indent=4, ensure_ascii=False)
+            
+            self.log_message("成功: 当前输入已保存为初始目标。")
+        except Exception as e:
+            self.log_message(f"错误: 保存初始目标失败 - {e}")
+
+    @pyqtSlot()
+    def load_initial_target(self, is_silent=False):
+        """从 initial_target.json 文件中加载值并填充到UI控件。"""
+        try:
+            with open('initial_target.json', 'r', encoding='utf-8') as f:
+                initial_data = json.load(f)
+            
+            for name, value in initial_data.items():
+                widget = self.inputs.get(name)
+                if not widget:
+                    continue
+                
+                if isinstance(widget, QLineEdit):
+                    widget.setText(value)
+                elif isinstance(widget, QComboBox):
+                    index = widget.findText(value)
+                    if index != -1:
+                        widget.setCurrentIndex(index)
+            
+            if not is_silent:
+                self.log_message("成功: 已从文件加载初始目标。")
+        except FileNotFoundError:
+            if not is_silent:
+                self.log_message("信息: 未找到 'initial_target.json' 配置文件，将使用默认值。")
+        except Exception as e:
+            if not is_silent:
+                self.log_message(f"错误: 加载初始目标失败 - {e}")
 
 

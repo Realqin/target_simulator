@@ -1,7 +1,7 @@
 {
   "kafka": {
-    "bootstrap_servers": "localhost:9092",
-    "topic": "fusion_target_topic"
+    "bootstrap_servers": "10.100.0.211:9092",
+    "topic": "unionTargetPbTest"
   },
   "mysql": {
     "host": "10.100.0.14",

@@ -3,7 +3,6 @@ package uniseas.fusionTarget.protocol;
 option java_package = "protobuf";
 //option java_multiple_files = true;
 //option java_generic_services = false;
-
 message Position {
   double latitude  = 1;
   double longitude = 2;
@@ -51,17 +50,18 @@ message SourceType{
   repeated string ids=3;
 }
 
-//message FusionedTargetInfo{
-//  uint64 ullUniqueId = 1;
-//  uint32 uiStationId = 2;
-//  Position oPos = 3;
-//  uint32 uiStationType = 4;
-//  //65'A',82'R'
-//  uint64 ullPosUpdateTime = 5;
-//}
+//
+message FusionedTargetInfo{
+  uint64 ullUniqueId = 1;
+  uint32 uiStationId = 2;
+  Position oPos = 3;
+  uint32 uiStationType = 4;  //65'A',82'R'
+  uint64 ullPosUpdateTime = 5;
+}
 
 //目标类型
-enum TargetType{
+enum TargetType
+{
   TT_UNKNOWN=0;
   TT_A=1;             //ais a
   TT_AP=2;            //ais a + predicted
@@ -97,7 +97,8 @@ message TargetProto {
   uint32 maxLen=7;
   uint32 minLen =8;
   repeated SourceType sources=9;
-  //repeated FusionedTargetInfo vecFusionedTargetInfo = 10;
+  repeated FusionedTargetInfo vecFusionedTargetInfo = 10;
+
   TargetType eTargetType=11;
 }
 
