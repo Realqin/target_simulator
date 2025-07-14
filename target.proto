@@ -3,11 +3,13 @@ package uniseas.fusionTarget.protocol;
 option java_package = "protobuf";
 //option java_multiple_files = true;
 //option java_generic_services = false;
+//位置
 message Position {
   double latitude  = 1;
   double longitude = 2;
 }
 
+//状态
 enum CurStatusProto {
   UNDEFINED=0;
   NEW=1;

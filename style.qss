@@ -54,7 +54,7 @@ QLineEdit:disabled, QTextEdit:disabled {
 
 /* ComboBox Styling */
 QComboBox {
-    background-color: #FFFFFF;
+    background-color: #D7E4F2;
     color: #2c3e50;
     border: 1px solid #BDC3C7;
     border-radius: 4px;

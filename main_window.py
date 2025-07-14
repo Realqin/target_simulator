@@ -112,15 +112,23 @@ class MainWindow(QWidget):
         
         # 返回一个安全的默认值
         return {
-            "kafka": {"bootstrap_servers": "localhost:9092", "topic": "fusion_target_topic"},
+            "kafka": {
+                "bootstrap_servers": "localhost:9092", 
+                "topic": "fusion_target_topic",
+                "ais_static_topic": "ais_static_topic"
+            },
             "starrocks": {
                 "host": "localhost", "port": 9030, "user": "root", "password": "", "database": "ods"
             },
             "ui_options": {
-                "eTargetType": {"OTHERS": 14},
-                "shiptype": {"其他": 99},
-                "sost": {"正常": 1},
-                "dataStatus": {"new": 0, "update": 1, "delete": 2}
+                "eTargetType": {"OTHERS": 14}, "shiptype": {"其他": 99},
+                "sost": {"正常": 1}, "dataStatus": {"new": 0, "update": 1, "delete": 2},
+                "province": {"未选择": 0}
+            },
+            "random_generation": {
+                "id": {"prefix": "11", "length": 20},
+                "mmsi": {"prefix": "", "length": 9},
+                "bds": {"prefix": "", "length": 9}
             }
         }
 
@@ -326,7 +334,7 @@ class MainWindow(QWidget):
 
     def create_target_info_group(self):
         """创建“目标信息”模块的 GroupBox"""
-        group_box = QGroupBox("目标信息")
+        group_box = QGroupBox("目标信息（必填）")
         grid_layout = QGridLayout()
         grid_layout.setSpacing(10)
 
@@ -334,11 +342,12 @@ class MainWindow(QWidget):
         self.inputs = {
             "eTargetType": QComboBox(), "vesselName": QLineEdit(),
             "id": QLineEdit(), "mmsi": QLineEdit(),
-            "beidouId": QLineEdit(), "shiptype": QComboBox(),
+            "bds": QLineEdit(), "shiptype": QComboBox(),
             "course": QLineEdit(), "speed": QLineEdit(),
             "longitude": QLineEdit(), "latitude": QLineEdit(),
             "len": QLineEdit(), "maxLength": QLineEdit(),
-            "sost": QComboBox(), "dataStatus": QComboBox()
+            "sost": QComboBox(), "dataStatus": QComboBox(),
+            "province": QComboBox()
         }
         
         # 填充下拉列表
@@ -350,6 +359,9 @@ class MainWindow(QWidget):
             self.inputs['sost'].addItem(text, value)
         for text, value in self.config['ui_options']['dataStatus'].items():
             self.inputs['dataStatus'].addItem(text, value)
+        if self.config['ui_options'].get('province'):
+            for text, value in self.config['ui_options']['province'].items():
+                self.inputs['province'].addItem(text, value)
 
         # --- 添加控件到网格布局 ---
         grid_layout.addWidget(QLabel("目标类型:"), 0, 0, Qt.AlignRight)
@@ -361,7 +373,7 @@ class MainWindow(QWidget):
         id_layout = QHBoxLayout()
         id_layout.addWidget(self.inputs["id"])
         random_id_btn = QPushButton("随机")
-        random_id_btn.clicked.connect(self.generate_random_id)
+        random_id_btn.clicked.connect(lambda: self._generate_random_value("id", "ID"))
         id_layout.addWidget(random_id_btn)
         grid_layout.addWidget(QLabel("ID:"), 1, 0, Qt.AlignRight)
         grid_layout.addLayout(id_layout, 1, 1)
@@ -370,13 +382,22 @@ class MainWindow(QWidget):
         mmsi_layout = QHBoxLayout()
         mmsi_layout.addWidget(self.inputs["mmsi"])
         random_mmsi_btn = QPushButton("随机")
-        random_mmsi_btn.clicked.connect(self.generate_random_mmsi)
+        random_mmsi_btn.clicked.connect(lambda: self._generate_random_value("mmsi", "MMSI"))
         mmsi_layout.addWidget(random_mmsi_btn)
         grid_layout.addWidget(QLabel("MMSI:"), 1, 2, Qt.AlignRight)
         grid_layout.addLayout(mmsi_layout, 1, 3)
 
+        # BDS with random button
+        bds_layout = QHBoxLayout()
+        bds_layout.addWidget(self.inputs["bds"])
+        random_bds_btn = QPushButton("随机")
+        random_bds_btn.clicked.connect(lambda: self._generate_random_value("bds", "BDS"))
+        bds_layout.addWidget(random_bds_btn)
         grid_layout.addWidget(QLabel("北斗号:"), 2, 0, Qt.AlignRight)
-        grid_layout.addWidget(self.inputs["beidouId"], 2, 1)
+        grid_layout.addLayout(bds_layout, 2, 1)
+
+        # grid_layout.addWidget(QLabel("北斗号:"), 2, 0, Qt.AlignRight)
+        # grid_layout.addWidget(self.inputs["beidouId"], 2, 1)
         grid_layout.addWidget(QLabel("船舶类型:"), 2, 2, Qt.AlignRight)
         grid_layout.addWidget(self.inputs["shiptype"], 2, 3)
 
@@ -427,6 +448,9 @@ class MainWindow(QWidget):
         grid_layout.addWidget(QLabel("数据状态:"), 6, 2, Qt.AlignRight)
         grid_layout.addLayout(data_status_layout, 6, 3)
 
+        grid_layout.addWidget(QLabel("省份:"), 7, 0, Qt.AlignRight)
+        grid_layout.addWidget(self.inputs["province"], 7, 1)
+
         self.data_status_checkbox.setChecked(True)
 
         group_box.setLayout(grid_layout)
@@ -440,55 +464,47 @@ class MainWindow(QWidget):
 
         # 初始化该模块的控件
         self.inputs.update({
-            "deviceCategory": QLineEdit(), "nationality": QLineEdit(),
-            "imo": QLineEdit(), "callSign": QLineEdit(),
-            "shipWidth": QLineEdit(), "draught": QLineEdit(),
-            "heading": QLineEdit(), "eta": QLineEdit(),
-            "destination": QLineEdit()
+            "nationality": QLineEdit(), "imo": QLineEdit(), 
+            "callSign": QLineEdit(), "shipWidth": QLineEdit(), 
+            "draught": QLineEdit(), "heading": QLineEdit(), 
+            "eta": QLineEdit(), "destination": QLineEdit()
         })
 
         # --- 添加控件到网格布局 ---
-        grid_layout.addWidget(QLabel("设备分类:"), 0, 0, Qt.AlignRight)
-        grid_layout.addWidget(self.inputs["deviceCategory"], 0, 1)
-        grid_layout.addWidget(QLabel("船籍:"), 0, 2, Qt.AlignRight)
-        grid_layout.addWidget(self.inputs["nationality"], 0, 3)
-
-        grid_layout.addWidget(QLabel("IMO:"), 1, 0, Qt.AlignRight)
-        grid_layout.addWidget(self.inputs["imo"], 1, 1)
-        grid_layout.addWidget(QLabel("呼号:"), 1, 2, Qt.AlignRight)
-        grid_layout.addWidget(self.inputs["callSign"], 1, 3)
+        grid_layout.addWidget(QLabel("IMO:"), 0, 0, Qt.AlignRight)
+        grid_layout.addWidget(self.inputs["imo"], 0, 1)
+        grid_layout.addWidget(QLabel("呼号:"), 0, 2, Qt.AlignRight)
+        grid_layout.addWidget(self.inputs["callSign"], 0, 3)
 
         # 船宽输入框带单位
         len_layout = QHBoxLayout()
         len_layout.addWidget(self.inputs["shipWidth"])
         len_layout.addWidget(QLabel("米"))
-        grid_layout.addWidget(QLabel("船宽:"), 2, 0, Qt.AlignRight)
-        grid_layout.addLayout(len_layout, 2, 1)
+        grid_layout.addWidget(QLabel("船宽:"), 1, 0, Qt.AlignRight)
+        grid_layout.addLayout(len_layout, 1, 1)
 
         # 吃水输入框带单位
         len_layout = QHBoxLayout()
         len_layout.addWidget(self.inputs["draught"])
         len_layout.addWidget(QLabel("米"))
-        grid_layout.addWidget(QLabel("吃水:"), 2, 2, Qt.AlignRight)
-        grid_layout.addLayout(len_layout, 2, 3)
-
-        # grid_layout.addWidget(QLabel("船宽:"), 2, 0, Qt.AlignRight)
-        # grid_layout.addWidget(self.inputs["shipWidth"], 2, 1)
-        # grid_layout.addWidget(QLabel("吃水:"), 2, 2, Qt.AlignRight)
-        # grid_layout.addWidget(self.inputs["draught"], 2, 3)
+        grid_layout.addWidget(QLabel("吃水:"), 1, 2, Qt.AlignRight)
+        grid_layout.addLayout(len_layout, 1, 3)
 
         # 艏向输入框带单位
         len_layout = QHBoxLayout()
         len_layout.addWidget(self.inputs["heading"])
         len_layout.addWidget(QLabel("度"))
-        grid_layout.addWidget(QLabel("艏向:"), 3, 0, Qt.AlignRight)
-        grid_layout.addLayout(len_layout, 3, 1)
+        grid_layout.addWidget(QLabel("艏向:"), 2, 0, Qt.AlignRight)
+        grid_layout.addLayout(len_layout, 2, 1)
 
-        grid_layout.addWidget(QLabel("预到时间:"), 3, 2, Qt.AlignRight)
-        grid_layout.addWidget(self.inputs["eta"], 3, 3)
+        grid_layout.addWidget(QLabel("预到时间:"), 2, 2, Qt.AlignRight)
+        grid_layout.addWidget(self.inputs["eta"], 2, 3)
 
-        grid_layout.addWidget(QLabel("目的地:"), 4, 0, Qt.AlignRight)
-        grid_layout.addWidget(self.inputs["destination"], 4, 1, 1, 3)
+        grid_layout.addWidget(QLabel("船籍:"), 3, 0, Qt.AlignRight)
+        grid_layout.addWidget(self.inputs["nationality"], 3, 1)
+
+        grid_layout.addWidget(QLabel("目的地:"), 3, 2, Qt.AlignRight)
+        grid_layout.addWidget(self.inputs["destination"], 3, 3)
 
         group_box.setLayout(grid_layout)
         return group_box
@@ -604,20 +620,32 @@ class MainWindow(QWidget):
         group_box.setLayout(v_layout)
         return group_box
 
-    @pyqtSlot()
-    def generate_random_id(self):
-        """生成一个以99开头的20位数字ID"""
-        random_part = ''.join([str(random.randint(0, 9)) for _ in range(18)])
-        new_id = "11" + random_part
-        self.inputs["id"].setText(new_id)
-        self.log_message(f"已生成随机ID: {new_id}")
+    def _generate_random_value(self, field_key, field_name_for_log):
+        """
+        根据配置文件中的规则生成一个随机值。
+        :param field_key: 在 self.inputs 和 config 中使用的键（如 'id', 'mmsi'）
+        :param field_name_for_log: 在日志中显示的名称（如 'ID', 'MMSI'）
+        """
+        try:
+            config = self.config['random_generation'][field_key]
+            prefix = config.get('prefix', '')
+            length = config.get('length', 9)
 
-    @pyqtSlot()
-    def generate_random_mmsi(self):
-        """生成一个9位数字的MMSI"""
-        new_mmsi = ''.join([str(random.randint(0, 9)) for _ in range(9)])
-        self.inputs["mmsi"].setText(new_mmsi)
-        self.log_message(f"已生成随机MMSI: {new_mmsi}")
+            if length <= len(prefix):
+                self.log_message(f"错误: {field_name_for_log} 配置的总长度({length})必须大于前缀'{prefix}'的长度。")
+                return
+
+            random_len = length - len(prefix)
+            random_part = ''.join([str(random.randint(0, 9)) for _ in range(random_len)])
+            new_value = prefix + random_part
+            
+            self.inputs[field_key].setText(new_value)
+            self.log_message(f"已生成随机{field_name_for_log}: {new_value}")
+
+        except KeyError:
+            self.log_message(f"错误: 在配置文件中未找到 '{field_key}' 的随机生成规则。")
+        except Exception as e:
+            self.log_message(f"生成随机{field_name_for_log}时出错: {e}")
 
     @pyqtSlot(int)
     def update_course_from_button(self, angle):
@@ -634,12 +662,12 @@ class MainWindow(QWidget):
         # 映射关系：UI标签 -> 内部字段名
         label_map = {
             "目标类型": "eTargetType", "船名": "vesselName", "ID": "id", "MMSI": "mmsi",
-            "北斗号": "beidouId", "船舶类型": "shiptype", "航向": "course", "航速": "speed",
+            "北斗号": "bds", "船舶类型": "shiptype", "航向": "course", "航速": "speed",
             "经度": "longitude", "纬度": "latitude", "船长": "len", "最大船长": "maxLength",
             "目标状态": "sost", "数据状态": "dataStatus", "设备分类": "deviceCategory",
             "船籍": "nationality", "IMO": "imo", "呼号": "callSign", "船宽": "shipWidth",
             "吃水": "draught", "艏向": "heading", "预到时间": "eta", "目的地": "destination",
-            "AIS信息源":"aisSource","北斗信息源":"bdSource","雷达信息源":"radarSource"
+            "AIS信息源":"aisSource","北斗信息源":"bdSource","雷达信息源":"radarSource","省份":"province"
         }
         
         # 需要特殊处理（只提取数字）的字段
@@ -780,62 +808,115 @@ class MainWindow(QWidget):
 
     def send_data(self):
         """
-        核心函数：收集UI数据，构建protobuf消息，并调用Kafka生产者发送。
+        核心函数：收集UI数据，构建protobuf和JSON消息，并分别调用Kafka生产者发送。
         """
         try:
-            target_list = target_pb2.TargetProtoList()
-            target = target_list.list.add()
+            # --- 1. 发送 Protobuf 消息 ---
+            self.send_proto_message()
 
-            # --- 填充 Protobuf 消息 ---
-            target.id = self.get_field_value("id", int, 0)
-            target.lastTm = int(time.time() * 1000) # 总是使用当前时间戳
-            
-            target.sost = self.inputs['sost'].currentData()
-            target.eTargetType = self.inputs['eTargetType'].currentData()
-
-            # 处理数据状态，仅当复选框未勾选且有有效选择时才赋值
-            if not self.data_status_checkbox.isChecked() and self.inputs['dataStatus'].currentIndex() != -1:
-                target.dataStatus = self.inputs['dataStatus'].currentData()
-            
-            pos_info = target.pos
-            pos_info.id = target.id
-            pos_info.mmsi = self.get_field_value("mmsi", int, 0)
-            pos_info.vesselName = self.get_field_value("vesselName")
-            pos_info.speed = self.get_field_value("speed", float, 0.0)
-            pos_info.course = self.get_field_value("course", float, 0.0)
-            pos_info.len = self.get_field_value("len", int, 0)
-            pos_info.shiptype = self.inputs['shiptype'].currentData()
-            
-            geo_ptn = pos_info.geoPtn
-            geo_ptn.longitude = self.get_field_value("longitude", float, 0.0)
-            geo_ptn.latitude = self.get_field_value("latitude", float, 0.0)
-
-            # 根据文本框内容添加 source
-            if self.inputs["radarSource"].text():
-                source = target.sources.add()
-                source.provider = "雷达"
-                source.type = "RADAR"
-                source.ids.append(self.inputs["radarSource"].text())
-            if self.inputs["aisSource"].text():
-                source = target.sources.add()
-                source.provider = "AIS"
-                source.type = "AIS"
-                source.ids.append(self.inputs["aisSource"].text())
-            if self.inputs["bdSource"].text():
-                source = target.sources.add()
-                source.provider = "北斗"
-                source.type = "BEIDOU"
-                source.ids.append(self.inputs["bdSource"].text())
-
-            self.log_message("构造的消息内容:\n" + str(target).strip())
-
-            pb_data = target_list.SerializeToString()
-            
-            topic = self.config['kafka']['topic']
-            self.kafka_producer.send_message(topic, pb_data)
+            # --- 2. 发送 AIS 静态信息 JSON ---
+            self.send_ais_static_json()
 
         except Exception as e:
-            self.log_message(f"创建或发送消息时发生严重错误: {e}")
+            self.log_message(f"发送过程中发生严重错误: {e}")
+
+    def send_proto_message(self):
+        """构建并发送主要的目标Protobuf消息。"""
+        target_list = target_pb2.TargetProtoList()
+        target = target_list.list.add()
+
+        # --- 填充 Protobuf 消息 ---
+        target.id = self.get_field_value("id", int, 0)
+        target.lastTm = int(time.time() * 1000) # 总是使用当前时间戳
+        
+        target.sost = self.inputs['sost'].currentData()
+        target.eTargetType = self.inputs['eTargetType'].currentData()
+        if self.inputs['province'].currentIndex() > 0: # 仅当选择了有效省份时才赋值
+            target.adapterId = self.inputs['province'].currentData()
+
+        # 处理数据状态，仅当复选框未勾选且有有效选择时才赋值
+        if not self.data_status_checkbox.isChecked() and self.inputs['dataStatus'].currentIndex() != -1:
+            target.status = self.inputs['dataStatus'].currentData()
+        
+        pos_info = target.pos
+        pos_info.id = target.id
+        pos_info.mmsi = self.get_field_value("mmsi", int, 0)
+        pos_info.vesselName = self.get_field_value("vesselName")
+        pos_info.speed = self.get_field_value("speed", float, 0.0)
+        pos_info.course = self.get_field_value("course", float, 0.0)
+        pos_info.len = self.get_field_value("len", int, 0)
+        pos_info.shiptype = self.inputs['shiptype'].currentData()
+        
+        geo_ptn = pos_info.geoPtn
+        geo_ptn.longitude = self.get_field_value("longitude", float, 0.0)
+        geo_ptn.latitude = self.get_field_value("latitude", float, 0.0)
+
+        # 根据文本框内容添加 source
+        if self.inputs["radarSource"].text():
+            source = target.sources.add()
+            source.provider = "雷达"
+            source.type = "RADAR"
+            source.ids.append(self.inputs["radarSource"].text())
+        if self.inputs["aisSource"].text():
+            source = target.sources.add()
+            source.provider = "AIS"
+            source.type = "AIS"
+            source.ids.append(self.inputs["aisSource"].text())
+        if self.inputs["bdSource"].text():
+            source = target.sources.add()
+            source.provider = "北斗"
+            source.type = "BEIDOU"
+            source.ids.append(self.inputs["bdSource"].text())
+
+        self.log_message("构造的 Protobuf 消息内容:\n" + str(target).strip())
+
+        pb_data = target_list.SerializeToString()
+        
+        topic = self.config['kafka']['topic']
+        self.kafka_producer.send_message(topic, pb_data)
+        self.log_message(f"已向 Topic '{topic}' 发送 Protobuf 消息。")
+
+    def send_ais_static_json(self):
+        """构建并发送AIS静态信息的JSON消息。"""
+        mmsi = self.get_field_value("mmsi")
+        if not mmsi:
+            self.log_message("信息: MMSI为空，跳过发送AIS静态信息JSON。")
+            return
+
+        # 根据UI输入构建字典
+        ais_info = {
+            "MMSI": mmsi,
+            "Vessel Name": self.get_field_value("vesselName"),
+            "Call_Sign": self.get_field_value("callSign"),
+            "IMO": self.get_field_value("imo"),
+            "Ship Type": self.inputs["shiptype"].currentText(),
+            "LengthRealTime": self.get_field_value("len"),
+            "Wide": self.get_field_value("shipWidth"),
+            "draught": self.get_field_value("draught"),
+            "Destination": self.get_field_value("destination"),
+            "etaTime": self.get_field_value("eta"),
+            "Nationality": self.get_field_value("nationality"),
+            "Ship Class": "A", # 默认为A类
+            "extInfo": None
+            # 示例中的其他字段如 "A (to Bow)" 等没有对应UI，因此省略
+        }
+
+        # 包装在顶层结构中
+        json_payload = {"AisExts": [ais_info]}
+        
+        # 转换为JSON字符串
+        json_data = json.dumps(json_payload, ensure_ascii=False, indent=2)
+        
+        self.log_message("构造的 JSON 消息内容:\n" + json_data)
+
+        # 发送到指定的Topic
+        topic = self.config['kafka'].get('ais_static_topic')
+        if not topic:
+            self.log_message("警告: 在 config.json 中未找到 'ais_static_topic'，无法发送JSON消息。")
+            return
+            
+        self.kafka_producer.send_message(topic, json_data.encode('utf-8'))
+        self.log_message(f"已向 Topic '{topic}' 发送 JSON 消息。")
 
     def query_trajectory_data(self):
         """从查询构建器表格中读取所有行，并从数据库查询轨迹数据"""
@@ -1184,6 +1265,7 @@ class MainWindow(QWidget):
                 "mmsi": self.get_field_value("mmsi", int, 0),
                 "idR": 0, # 暂无此输入
                 "state": self.inputs['sost'].currentData(),
+                "adapterId": self.inputs['province'].currentData(),
                 "quality": 100, # 默认值
                 "course": self.get_field_value("course", float, 0.0),
                 "speed": self.get_field_value("speed", float, 0.0),

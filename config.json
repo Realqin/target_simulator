@@ -1,7 +1,8 @@
 {
   "kafka": {
     "bootstrap_servers": "10.100.0.211:9092",
-    "topic": "unionTargetPbTest"
+    "topic": "unionTargetPbTest",
+    "ais_static_topic": "aisStaticJsonTest"
   },
   "mysql": {
     "host": "10.100.0.14",
@@ -52,6 +53,25 @@
       "new": 0,
       "update": 1,
       "delete": 2
+    },
+    "province": {
+      "海南": 12,
+      "环渤海": 11
+
+    }
+  },
+  "random_generation": {
+    "id": {
+      "prefix": "11",
+      "length": 20
+    },
+    "mmsi": {
+      "prefix": "",
+      "length": 9
+    },
+    "bds": {
+      "prefix": "",
+      "length": 9
     }
   }
 }
