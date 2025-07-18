@@ -1,8 +1,8 @@
 {
   "kafka": {
     "bootstrap_servers": "10.100.0.211:9092",
-    "topic": "unionTargetPbTest",
-    "ais_static_topic": "aisStaticJsonTest"
+    "topic": "unionTargetPb",
+    "ais_static_topic": "aisStaticInfoJsTest"
   },
   "mysql": {
     "host": "10.100.0.14",
@@ -34,36 +34,69 @@
       "RADAR_AIS_A_BDS": 11,
       "RADAR_AIS_B_BDS": 12,
       "CCTV_AIS": 13,
-      "OTHERS": 14
+      "OTHERS": 14,
+      "AID": 15,
+      "VAID": 16,
+      "RADAR_AID": 17,
+      "RADAR_VAID": 18,
+      "OBJECT_STATIC_OBJ": 19,
+      "RADAR_OBJECT_STATIC_OBJ": 20
     },
     "shiptype": {
-      "渔船": 0,
-      "货船": 1,
-      "油船": 2,
-      "客船": 3,
-      "拖船": 4,
-      "其他": 99
+      "渔船": 30,
+      "货船": 70,
+      "油船": 80,
+      "客船": 60,
+      "拖船": 52,
+      "公务船":55,
+      "作业船":33,
+      "其他": 200
     },
+
+
     "sost": {
       "正常": 1,
-      "预测": 2,
-      "丢失": 3
+      "预测": 2
     },
     "dataStatus": {
-      "new": 0,
-      "update": 1,
-      "delete": 2
+      "new": 1,
+      "update": 2,
+      "delete": 3
     },
     "province": {
       "海南": 12,
       "环渤海": 11
 
-    }
+    },
+    "eTargetType_mapping": [
+      { "ui_class": "AIS_A", "ui_state": 1, "eTargetType": 1 },
+      { "ui_class": "AIS_A", "ui_state": 2, "eTargetType": 2 },
+      { "ui_class": "AIS_B", "ui_state": 1, "eTargetType": 3 },
+      { "ui_class": "AIS_B", "ui_state": 2, "eTargetType": 4 },
+      { "ui_class": "AID", "ui_state": 1, "eTargetType": 5 },
+      { "ui_class": "VAID", "ui_state": 1, "eTargetType": 6 },
+      { "ui_class": "RADAR", "ui_state": 1, "eTargetType": 7 },
+      { "ui_class": "RADAR", "ui_state": 2, "eTargetType": 8 },
+      { "ui_class": "RADAR_AIS_A", "ui_state": 1, "eTargetType": 9 },
+      { "ui_class": "RADAR_AIS_A", "ui_state": 2, "eTargetType": 11 },
+      { "ui_class": "RADAR_AIS_A", "ui_state": 1, "eTargetType": 12 },
+      { "ui_class": "RADAR_AIS_A", "ui_state": 2, "eTargetType": 13 },
+      { "ui_class": "RADAR_AIS_B", "ui_state": 1, "eTargetType": 14 },
+      { "ui_class": "RADAR_AIS_B", "ui_state": 2, "eTargetType": 15 },
+      { "ui_class": "RADAR_AIS_B", "ui_state": 1, "eTargetType": 16 },
+      { "ui_class": "RADAR_AIS_B", "ui_state": 2, "eTargetType": 17 },
+      { "ui_class": "RADAR_AID", "ui_state": 1, "eTargetType": 18 },
+      { "ui_class": "RADAR_VAID", "ui_state": 1, "eTargetType": 19 },
+      { "ui_class": "OBJECT_STATIC_OBJ", "ui_state": 1, "eTargetType": 20 },
+      { "ui_class": "RADAR_OBJECT_STATIC_OBJ", "ui_state": 1, "eTargetType": 21 },
+      { "ui_class": "RADAR", "ui_state": 1, "eTargetType": 22 },
+      { "ui_class": "RADAR", "ui_state": 2, "eTargetType": 23 }
+    ]
   },
   "random_generation": {
     "id": {
       "prefix": "11",
-      "length": 20
+      "length": 19
     },
     "mmsi": {
       "prefix": "",

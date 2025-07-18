@@ -3,6 +3,8 @@
 import target_pb2
 from google.protobuf.json_format import MessageToDict
 
+
+# 组装数据，只是为了看，不需要
 def assemble_proto_from_data(data_dict):
     """
     将一个 Python 字典（源自 JSON）的数据组装到一个 TargetProto Protobuf 对象中。
@@ -39,15 +41,27 @@ def assemble_proto_from_data(data_dict):
     pos.id_r = data_dict.get("idR", 0)
     pos.state = data_dict.get("state", 0)
     pos.quality = data_dict.get("quality", 0)
+    pos.period = data_dict.get("period", 0)
     pos.course = data_dict.get("course", 0.0)
     pos.speed = data_dict.get("speed", 0.0)
     pos.heading = data_dict.get("heading", 0.0)
     pos.len = int(data_dict.get("len", 0))
     pos.wid = data_dict.get("wid", 0)
     pos.shiptype = data_dict.get("shipType", 0)
+    pos.s_class = data_dict.get("class", 0)
     pos.flags = data_dict.get("flags", 0)
     pos.m_mmsi = data_dict.get("mMmsi", 0)
     pos.vesselName = data_dict.get("vesselName", "")
+    pos.vendorId = data_dict.get("vendorId", "")
+    pos.callSign = data_dict.get("Call_Sign", "")
+    #pos.imo = data_dict.get("imo", 0)
+    pos.id = data_dict.get("id", 0)
+    pos.fleetId = data_dict.get("fleetId", 0)
+    pos.comment = data_dict.get("comment", "")
+    pos.rec_course = data_dict.get("rec_course", 0)
+    pos.rec_speed = data_dict.get("rec_speed", 0)
+    pos.aidtype = data_dict.get("aidtype", 0)
+
 
     # 填充经纬度
     pos.geoPtn.latitude = data_dict.get("latitude", 0.0)
@@ -55,19 +69,26 @@ def assemble_proto_from_data(data_dict):
 
     # 从 aisBaseInfo 中提取字段
     ais_info = data_dict.get("aisBaseInfo", {})
+
     pos.callSign = ais_info.get("Call_Sign", "")
-    # proto ��� imo 是 uint32，需要转换
+    # proto 里的 imo 是 uint32，需要转换
     if ais_info.get("IMO"):
         pos.imo = int(ais_info.get("IMO"))
 
-    # 4. 填充 sources
-    if "sources" in data_dict:
-        for source_item in data_dict["sources"]:
-            source_proto = target.sources.add()
-            source_proto.provider = source_item.get("provider", "")
-            source_proto.type = source_item.get("type", "")
-            if "ids" in source_item:
-                source_proto.ids.extend(source_item["ids"])
+    # 同样需要将字符串ID转换为整数
+    id_val = data_dict.get("id")
+    if id_val:
+        try:
+            pos.id = int(id_val)
+        except (ValueError, TypeError):
+            pos.id = 0 # 如果转换失败，则设为默认值
+    else:
+        pos.id = 0
+    
+    pos.fleetId = data_dict.get("fleetId", 0)
+    pos.comment = data_dict.get("comment", "")
+    pos.rec_course = data_dict.get("rec_course", 0)
+    pos.rec_speed = data_dict.get("rec_speed", 0)
 
     # 5. 填充 fusionTargets (vecFusionedTargetInfo)
     if "fusionTargets" in data_dict:

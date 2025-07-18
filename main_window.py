@@ -826,15 +826,37 @@ class MainWindow(QWidget):
             target_list = target_pb2.TargetProtoList()
             target = target_list.list.add()
 
+            # 根据新的映射关系计算 eTargetType
+            selected_class = self.inputs['eTargetType'].currentText()
+            selected_state = self.inputs['sost'].currentData()
+            eTargetType_val = 0  # 默认为 TT_UNKNOWN
+            mapping_found = False
+            
+            if 'eTargetType_mapping' in self.config['ui_options']:
+                for rule in self.config['ui_options']['eTargetType_mapping']:
+                    if rule['ui_class'] == selected_class and rule['ui_state'] == selected_state:
+                        eTargetType_val = rule['eTargetType']
+                        mapping_found = True
+                        self.log_message(f"映射成功: 类型='{selected_class}', 状态={selected_state} -> eTargetType={eTargetType_val}")
+                        break # 找到第一个匹配就停止
+            
+            if not mapping_found:
+                self.log_message(f"警告: 未找到与类型='{selected_class}'和状态={selected_state}匹配的eTargetType映射规则。将使用默认值0。")
+
             target.id = self.get_field_value("id", int, 0)
             target.lastTm = int(time.time() * 1000)
             target.sost = self.inputs['sost'].currentData()
-            target.eTargetType = self.inputs['eTargetType'].currentData()
+            target.eTargetType = eTargetType_val # 使用映射后的值
             if self.inputs['province'].currentIndex() > 0:
                 target.adapterId = self.inputs['province'].currentData()
-            if not self.data_status_checkbox.isChecked() and self.inputs['dataStatus'].currentIndex() != -1:
-                target.status = self.inputs['dataStatus'].currentData()
-            
+
+            # if not self.data_status_checkbox.isChecked() and self.inputs['dataStatus'].currentIndex() != -1:
+            #     # 从config.json读取 "UPDATE" 对应的值
+            #     status_text = self.inputs['dataStatus'].currentText().upper()
+            #     target.status = self.config['ui_options']['dataStatus'].get(status_text, 0)
+
+            target.status = self.inputs['dataStatus'].currentData()
+
             pos_info = target.pos
             pos_info.id = target.id
             pos_info.mmsi = self.get_field_value("mmsi", int, 0)
@@ -845,13 +867,55 @@ class MainWindow(QWidget):
             pos_info.shiptype = self.inputs['shiptype'].currentData()
             pos_info.geoPtn.longitude = self.get_field_value("longitude", float, 0.0)
             pos_info.geoPtn.latitude = self.get_field_value("latitude", float, 0.0)
+            target.maxLen = pos_info.len
+            pos_info.displayId = int(target.id) % 100000
+            #填写后会生成雷达目标
+            if "RADAR" in  selected_class :
+                pos_info.id_r = 18
+            pos_info.state =  target.sost
+            pos_info.quality = 100
+            pos_info.period=10
+            pos_info.heading = pos_info.course
+            pos_info.s_class = 1
+            pos_info.m_mmsi = pos_info.mmsi
+            pos_info.aidtype = 1
+            target.adapterId=self.inputs['province'].currentData()
+
+
 
             if self.inputs["radarSource"].text():
-                source = target.sources.add(); source.provider = "雷达"; source.type = "RADAR"; source.ids.append(self.inputs["radarSource"].text())
+                source = target.sources.add()
+                source.provider = "HLX"
+                source.type = "RADAR"
+                source.ids.append(self.inputs["radarSource"].text())
             if self.inputs["aisSource"].text():
-                source = target.sources.add(); source.provider = "AIS"; source.type = "AIS"; source.ids.append(self.inputs["aisSource"].text())
+                source = target.sources.add()
+                source.provider = "HLX"
+                source.type = "AIS"
+                source.ids.append(self.inputs["aisSource"].text())
             if self.inputs["bdSource"].text():
-                source = target.sources.add(); source.provider = "北斗"; source.type = "BEIDOU"; source.ids.append(self.inputs["bdSource"].text())
+                source = target.sources.add()
+                source.provider = "HLX"
+                source.type = "BDS"
+                source.ids.append(self.inputs["bdSource"].text())
+
+            if self.inputs["radarSource"].text():
+                info = target.vecFusionedTargetInfo.add()
+                info.uiStationType = 82  # 'R'
+                info.ullPosUpdateTime = target.lastTm
+                info.ullUniqueId = target.id
+                info.uiStationId = int(self.inputs["radarSource"].text())
+            if self.inputs["aisSource"].text():
+                info = target.vecFusionedTargetInfo.add()
+                info.uiStationType = 65  # 'A'
+                info.ullPosUpdateTime = target.lastTm
+                info.ullUniqueId = target.id
+                info.uiStationId = int(self.inputs["aisSource"].text())
+            if self.inputs["bdSource"].text():
+                info = target.vecFusionedTargetInfo.add()
+                info.ullPosUpdateTime = target.lastTm
+                info.ullUniqueId = target.id
+                info.uiStationId = int(self.inputs["bdSource"].text())
 
             self.log_message("构造的 Protobuf 消息内容:\n" + str(target).strip())
             pb_data = target_list.SerializeToString()
@@ -859,16 +923,20 @@ class MainWindow(QWidget):
             self.kafka_producer.send_message(topic, pb_data)
             self.log_message(f"已向 Topic '{topic}' 发送 Protobuf 消息。")
 
-            # --- 2. 发送 AIS 静态信息 JSON ---
+            # --- 2. 只发送 一条AIS 静态信息 JSON ---
             mmsi = self.get_field_value("mmsi")
             if mmsi:
+                # ais_info = {
+                #     "MMSI": mmsi, "Vessel Name": self.get_field_value("vesselName"), "Call_Sign": self.get_field_value("callSign"),
+                #     "IMO": self.get_field_value("imo"), "Ship Type": self.inputs["shiptype"].currentText(),
+                #     "LengthRealTime": self.get_field_value("len"), "Wide": self.get_field_value("shipWidth"),
+                #     "draught": self.get_field_value("draught"), "Destination": self.get_field_value("destination"),
+                #     "etaTime": self.get_field_value("eta"), "Nationality": self.get_field_value("nationality"),
+                #     "Ship Class": "A", "extInfo": None
+                # }
                 ais_info = {
-                    "MMSI": mmsi, "Vessel Name": self.get_field_value("vesselName"), "Call_Sign": self.get_field_value("callSign"),
-                    "IMO": self.get_field_value("imo"), "Ship Type": self.inputs["shiptype"].currentText(),
-                    "LengthRealTime": self.get_field_value("len"), "Wide": self.get_field_value("shipWidth"),
-                    "draught": self.get_field_value("draught"), "Destination": self.get_field_value("destination"),
-                    "etaTime": self.get_field_value("eta"), "Nationality": self.get_field_value("nationality"),
-                    "Ship Class": "A", "extInfo": None
+                    "MMSI": mmsi, "Vessel Name": self.get_field_value("vesselName")
+
                 }
                 json_payload = {"AisExts": [ais_info]}
                 json_data = json.dumps(json_payload, ensure_ascii=False, indent=2)
@@ -1057,6 +1125,9 @@ class MainWindow(QWidget):
             data_status_combo.setEnabled(True)
             data_status_combo.setCurrentIndex(0)
 
+
+
+    # 方便预览组装的数据，后面可以删除
     @pyqtSlot()
     def assemble_and_preview(self):
         self._assemble_and_preview_generic(self.inputs, self.data_status_checkbox, self.log_message)
@@ -1477,6 +1548,7 @@ class MainWindow(QWidget):
             self.db.close()
         event.accept()
 
+    # 不需要
     @pyqtSlot()
     def assemble_and_preview(self):
         """
