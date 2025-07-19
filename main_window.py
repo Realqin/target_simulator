@@ -10,7 +10,7 @@ from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QGridLayout, QGroupBox, QTextEdit, QSpacerItem, QSizePolicy,
     QComboBox, QCheckBox, QTabWidget, QTableWidget, QTableWidgetItem,
-    QHeaderView, QGraphicsView, QGraphicsScene, QDateTimeEdit, QGraphicsEllipseItem
+    QHeaderView, QGraphicsView, QGraphicsScene, QDateTimeEdit, QGraphicsEllipseItem, QApplication
 )
 from PyQt5.QtCore import pyqtSlot, QTimer, Qt, QDateTime
 from PyQt5.QtGui import QIcon, QCursor, QPen, QBrush, QColor, QPainter, QPainterPath
@@ -21,6 +21,7 @@ from kafka_producer import KProducer
 import target_pb2
 from data_assembler import assemble_proto_from_data
 from database import Database
+from location_calculator import LocationCalculator
 
 
 class ZoomableView(QGraphicsView):
@@ -69,16 +70,18 @@ class MainWindow(QWidget):
 
         # 加载外部配置
         self.config = self.load_config()
-        self.trajectory_data = {} # 用于存储查询到的轨迹数据
+        self.trajectory_data = {} # 用于存储查到的轨迹数据
         self.playback_timer = QTimer(self) # 回放专用定时器
         self.playback_timer.timeout.connect(self.send_playback_data)
         self.playback_targets = []
         self.current_playback_index = 0
 
+        # 新增：位置计算器实例
+        self.location_calculator = None
 
         # 创建一个定时器，用于周期性地发送数据
         self.sending_timer = QTimer(self)
-        self.sending_timer.timeout.connect(self.send_data)
+        self.sending_timer.timeout.connect(self.send_realtime_target_data)
 
         # 为静态信息页签创建独立的状态
         self.static_inputs = {}
@@ -91,6 +94,12 @@ class MainWindow(QWidget):
         self.static_data_status_checkbox = None
         self.static_log_group = None
         self.static_log_display = None
+
+        # 定义必填字段和样式
+        self.required_fields = ["id", "course", "speed", "longitude", "latitude", "len"]
+        self.invalid_style = "border: 1.5px solid red; border-radius: 4px;"
+        self.default_lineedit_style = ""
+        self.load_and_extract_styles()
 
         # 初始化UI界面
         self.init_ui()
@@ -110,6 +119,24 @@ class MainWindow(QWidget):
         except ValueError as e:
             self.log_message(f"错误: {e}")
             self.db = None
+
+    def load_and_extract_styles(self):
+        """加载QSS文件并提取QLineEdit的默认样式"""
+        try:
+            with open('style.qss', 'r', encoding='utf-8') as f:
+                stylesheet = f.read()
+                # 应用全局样式
+                QApplication.instance().setStyleSheet(stylesheet)
+                
+                # 简单提取QLineEdit的样式
+                # 注意：这是一个简化的解析，对于复杂的QSS可能不完全准确
+                match = re.search(r'QLineEdit\s*{(.*?)}', stylesheet, re.DOTALL)
+                if match:
+                    self.default_lineedit_style = match.group(1).strip()
+        except FileNotFoundError:
+            self.log_message("警告: 'style.qss' 未找到，无法加载自定义样式。")
+        except Exception as e:
+            self.log_message(f"加载样式时出错: {e}")
 
     def load_config(self):
         """从 config.json 加载配置。如果失败则返回默认配置。"""
@@ -499,6 +526,13 @@ class MainWindow(QWidget):
         grid_layout.addWidget(QLabel("省份:"), 7, 0, Qt.AlignRight)
         grid_layout.addWidget(self.inputs["province"], 7, 1)
 
+        # 为必填字段的输入变化连接信号，以便实时清除错误样式
+        for field_name in self.required_fields:
+            widget = self.inputs.get(field_name)
+            if isinstance(widget, QLineEdit):
+                # 使用 lambda 捕获正确的 widget 对象
+                widget.textChanged.connect(lambda text, w=widget: self.clear_field_style(w))
+
         self.data_status_checkbox.setChecked(True)
 
         group_box.setLayout(grid_layout)
@@ -782,13 +816,126 @@ class MainWindow(QWidget):
     @pyqtSlot()
     def clear_inputs(self):
         self._clear_inputs_generic(self.paste_input, self.inputs, self.data_status_checkbox)
+        # 清除所有必填字段的错误样式
+        for field_name in self.required_fields:
+            widget = self.inputs.get(field_name)
+            if widget:
+                widget.setStyleSheet(self.default_lineedit_style)
         self.log_message("所有输入已清除。")
 
+    def validate_required_fields(self):
+        """
+        校验所有必填字段是否已填写。
+        如果
+填写，则应用红色边框样式；否则清除样式。
+        :return: True 如果所有必填字段都已填写, False otherwise.
+        """
+        is_valid = True
+        for field_name in self.required_fields:
+            widget = self.inputs.get(field_name)
+            if widget and isinstance(widget, QLineEdit):
+                if not widget.text().strip():
+                    # 合并默认样式和错误样式
+                    widget.setStyleSheet(self.default_lineedit_style + self.invalid_style)
+                    is_valid = False
+                else:
+                    widget.setStyleSheet(self.default_lineedit_style) # 如果已填写，恢复默认样式
+        
+        if not is_valid:
+            self.log_message("错误: 有必填项未填写，请检查红色高亮框。")
+            
+        return is_valid
+
+    def clear_field_style(self, widget):
+        """清除特定输入框的样式，恢复其默认样式。"""
+        widget.setStyleSheet(self.default_lineedit_style)
+
     def toggle_sending_state(self):
-        self._toggle_sending_state_generic(self.sending_timer, self.frequency_input, self.start_pause_btn, self.terminate_btn, self.send_data, self.log_message)
+        """
+        切换发送状态（开始/暂停/继续）。
+        - 执行必填项校验。
+        - 如果是雷达目标，清空船名、MMSI、北斗号。
+        - 点击“开始”或“继续”时，立即发送一次静态信息。
+        - 点击
+开始”时，初始化位置计算器并立即发送第一条实时信息。
+        - 点击“暂停”时，停止定时器。
+        """
+        # 1. 校验必填项
+        if not self.validate_required_fields():
+            return # 如果校验失败，则不执行任何操作
+
+        # 2. 如果是雷达目标，清空相关字段并更新UI
+        selected_class = self.inputs['eTargetType'].currentText()
+        if "RADAR" == selected_class:
+            self.inputs['vesselName'].setText("")
+            self.inputs['mmsi'].setText("")
+            self.inputs['bds'].setText("")
+            # self.log_message("检测到雷达目标，已清空船名、MMSI和北斗号。")
+
+        if "BDS" not in selected_class :
+            self.inputs['bds'].setText("")
+
+
+        # 3. 如果当前是“终止”或“暂停”状态，则准备开始或继续
+        if not self.sending_timer.isActive():
+            try:
+                # 检查定时器间隔
+                interval_ms = int(float(self.frequency_input.text()) * 1000)
+                if interval_ms <= 0:
+                    raise ValueError("Interval must be positive")
+            except (ValueError, TypeError):
+                self.log_message("错误: 发送频率必须是一个大于0的数字。")
+                return
+
+            # 无论是开始还是继续，都先发送一次静态信息
+            self.send_one_time_static_info()
+
+            # 如果是全新开始（而非从暂停中恢复）
+            if self.location_calculator is None:
+                try:
+                    # 从UI读取初始参数
+                    start_lat = float(self.inputs['latitude'].text())
+                    start_lon = float(self.inputs['longitude'].text())
+                    speed = float(self.inputs['speed'].text())
+                    course = float(self.inputs['course'].text())
+                    
+                    # 创建计算器实例
+                    self.location_calculator = LocationCalculator(start_lat, start_lon, speed, course)
+                    self.log_message("位置计算器已初始化。开始新的轨迹计算。")
+                    # 立即发送第一个实时目标点
+                    self.send_realtime_target_data()
+
+                except (ValueError, TypeError):
+                    self.log_message("错误: 无法初始化位置计算器。请确保经纬度、速度和航向为有效的数字。")
+                    return # 参数无效，不启动
+
+            # 启动定时器
+            self.sending_timer.start(interval_ms)
+            self.log_message(f"发送已{'开始' if self.start_pause_btn.text() == '开始发送' else '继续'}，频率: {interval_ms/1000}s/次。")
+            self.start_pause_btn.setText("暂停发送")
+            self.terminate_btn.setEnabled(True)
+            # 在运行时禁用部分输入的编辑
+            # for key in ['latitude', 'longitude']:
+            #     self.inputs[key].setEnabled(False)
+
+        # 如果当前是“运行”状态，则暂停
+        else:
+            self.sending_timer.stop()
+            self.log_message("发送已暂停。")
+            self.start_pause_btn.setText("继续发送")
 
     def terminate_sending(self):
-        self._terminate_sending_generic(self.sending_timer, self.frequency_input, self.start_pause_btn, self.terminate_btn, self.log_message)
+        """
+        终止发送，并重置状态和计算器。
+        """
+        self.sending_timer.stop()
+        self.location_calculator = None # 重置计算器
+        self.log_message("发送已终止。")
+        self.start_pause_btn.setText("开始发送")
+        # self.terminate_btn.setEnabled(False)
+        # 重新启用所有输入框
+        # for key in ['latitude', 'longitude']:
+        #     self.inputs[key].setEnabled(True)
 
     def toggle_data_status_lock(self, is_checked):
         self._toggle_data_status_lock_generic(is_checked, self.inputs["dataStatus"])
@@ -817,11 +964,57 @@ class MainWindow(QWidget):
             self.log_message(f"警告: 字段 '{field_name}' 的值 '{text}' 无效。使用默认值。")
             return default_value
 
-    def send_data(self):
+    def send_one_time_static_info(self):
+        """只发送一次AIS静态信息（用于实时目标页签）。"""
+        try:
+            mmsi = self.get_field_value("mmsi")
+            if mmsi:
+                ais_info = {
+                    "MMSI": mmsi, "Vessel Name": self.get_field_value("vesselName")
+                }
+                json_payload = {"AisExts": [ais_info]}
+                json_data = json.dumps(json_payload, ensure_ascii=False, indent=2)
+                self.log_message("构造的单次静态 JSON 消息内容:\n" + json_data)
+                static_topic = self.config['kafka'].get('ais_static_topic')
+                if static_topic:
+                    self.kafka_producer.send_message(static_topic, json_data.encode('utf-8'))
+                    self.log_message(f"已向 Topic '{static_topic}' 发送单次静态 JSON 消息。")
+                else:
+                    self.log_message("警告: 在 config.json 中未找到 'ais_static_topic'。")
+            else:
+                self.log_message("信息: MMSI为空，跳过发送单次静态信息JSON。")
+        except Exception as e:
+            self.log_message(f"发送单次静态信息过程中发生错误: {e}")
+
+    def send_realtime_target_data(self):
         """
-        核心函数：收集实时目标UI数据，构建protobuf和JSON消息，并分别调用Kafka生产者发送。
+        核心函数：计算下一个点，更新UI，然后收集实时目标数据构建消息并发送。
         """
         try:
+            # --- 0. 如果计算器存在，则计算并更新位置 ---
+            if self.location_calculator:
+                try:
+                    interval_s = self.sending_timer.interval() / 1000.0
+                    
+                    # 从UI获取最新的速度和航向，以允许动态调整
+                    current_speed = float(self.inputs['speed'].text())
+                    current_course = float(self.inputs['course'].text())
+                    self.location_calculator.update_params(speed_knots=current_speed, course_degrees=current_course)
+
+                    # 计算下一个点
+                    new_lat, new_lon = self.location_calculator.calculate_next_point(interval_s)
+                    
+                    # 将新坐标回填到UI（保留足够的小数位）
+                    self.inputs['latitude'].setText(f"{new_lat:.8f}")
+                    self.inputs['longitude'].setText(f"{new_lon:.8f}")
+                    # self.log_message(f"计算出新坐标: Lat={new_lat:.8f}, Lon={new_lon:.8f}")
+
+                except (ValueError, TypeError) as e:
+                    self.log_message(f"错误: 无法计算下一个点，请检查速度/航向值。错误: {e}")
+                    # 停止发送以避免错误累积
+                    self.terminate_sending()
+                    return
+
             # --- 1. 发送 Protobuf 消息 ---
             target_list = target_pb2.TargetProtoList()
             target = target_list.list.add()
@@ -837,7 +1030,7 @@ class MainWindow(QWidget):
                     if rule['ui_class'] == selected_class and rule['ui_state'] == selected_state:
                         eTargetType_val = rule['eTargetType']
                         mapping_found = True
-                        self.log_message(f"映射成功: 类型='{selected_class}', 状态={selected_state} -> eTargetType={eTargetType_val}")
+                        # self.log_message(f"映射成功: 类型='{selected_class}', 状态={selected_state} -> eTargetType={eTargetType_val}")
                         break # 找到第一个匹配就停止
             
             if not mapping_found:
@@ -849,11 +1042,6 @@ class MainWindow(QWidget):
             target.eTargetType = eTargetType_val # 使用映射后的值
             if self.inputs['province'].currentIndex() > 0:
                 target.adapterId = self.inputs['province'].currentData()
-
-            # if not self.data_status_checkbox.isChecked() and self.inputs['dataStatus'].currentIndex() != -1:
-            #     # 从config.json读取 "UPDATE" 对应的值
-            #     status_text = self.inputs['dataStatus'].currentText().upper()
-            #     target.status = self.config['ui_options']['dataStatus'].get(status_text, 0)
 
             target.status = self.inputs['dataStatus'].currentData()
 
@@ -922,33 +1110,6 @@ class MainWindow(QWidget):
             topic = self.config['kafka']['topic']
             self.kafka_producer.send_message(topic, pb_data)
             self.log_message(f"已向 Topic '{topic}' 发送 Protobuf 消息。")
-
-            # --- 2. 只发送 一条AIS 静态信息 JSON ---
-            mmsi = self.get_field_value("mmsi")
-            if mmsi:
-                # ais_info = {
-                #     "MMSI": mmsi, "Vessel Name": self.get_field_value("vesselName"), "Call_Sign": self.get_field_value("callSign"),
-                #     "IMO": self.get_field_value("imo"), "Ship Type": self.inputs["shiptype"].currentText(),
-                #     "LengthRealTime": self.get_field_value("len"), "Wide": self.get_field_value("shipWidth"),
-                #     "draught": self.get_field_value("draught"), "Destination": self.get_field_value("destination"),
-                #     "etaTime": self.get_field_value("eta"), "Nationality": self.get_field_value("nationality"),
-                #     "Ship Class": "A", "extInfo": None
-                # }
-                ais_info = {
-                    "MMSI": mmsi, "Vessel Name": self.get_field_value("vesselName")
-
-                }
-                json_payload = {"AisExts": [ais_info]}
-                json_data = json.dumps(json_payload, ensure_ascii=False, indent=2)
-                self.log_message("构造的 JSON 消息内容:\n" + json_data)
-                static_topic = self.config['kafka'].get('ais_static_topic')
-                if static_topic:
-                    self.kafka_producer.send_message(static_topic, json_data.encode('utf-8'))
-                    self.log_message(f"已向 Topic '{static_topic}' 发送 JSON 消息。")
-                else:
-                    self.log_message("警告: 在 config.json 中未找到 'ais_static_topic'。")
-            else:
-                self.log_message("信息: MMSI为空，跳过发送AIS静态信息JSON。")
 
         except Exception as e:
             self.log_message(f"发送过程中发生严重错误: {e}")
@@ -1019,6 +1180,7 @@ class MainWindow(QWidget):
                     "Vessel Name": get_static_val("vesselName"),
                     "Call_Sign": get_static_val("callSign"),
                     "IMO": get_static_val("imo"),
+                    "LengthRealTime": get_static_val("len", int, 0),
                     "Ship Type": self.static_inputs["shiptype"].currentText(),
                     "LengthRealTime": get_static_val("len", int, 0),
                     "Wide": get_static_val("shipWidth", int, 0),
@@ -1140,7 +1302,8 @@ class MainWindow(QWidget):
     def _assemble_and_preview_generic(self, inputs_dict, data_status_checkbox, logger):
         """
         从UI收集数据，使用data_assembler进行组装，
-        然后压缩��编码并显示结果，模拟发送。
+        然后压缩
+编码并显示结果，模拟发送。
         """
         try:
             # Helper to get value from the correct inputs dict
@@ -1672,5 +1835,3 @@ class MainWindow(QWidget):
         except Exception as e:
             if not is_silent:
                 self.log_message(f"错误: 加载初始目标失败 - {e}")
-
-
