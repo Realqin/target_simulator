@@ -761,7 +761,7 @@ class MainWindow(QWidget):
                 return
 
             random_len = length - len(prefix)
-            random_part = ''.join([str(random.randint(0, 9)) for _ in range(random_len)])
+            random_part = ''.join([str(random.randint(1, 9)) for _ in range(random_len)])
             new_value = prefix + random_part
             
             inputs_dict[field_key].setText(new_value)
@@ -876,7 +876,7 @@ class MainWindow(QWidget):
             pos_info.quality = 100
             pos_info.period=10
             pos_info.heading = pos_info.course
-            pos_info.s_class = 1
+            pos_info.s_class = self.inputs['eTargetType'].currentData()
             pos_info.m_mmsi = pos_info.mmsi
             pos_info.aidtype = 1
             target.adapterId=self.inputs['province'].currentData()

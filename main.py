@@ -5,6 +5,7 @@ import traceback
 from PyQt5.QtWidgets import QApplication
 from main_window import MainWindow
 
+
 def main():
     """
     主函数，用于启动PyQt5应用程序。
