@@ -2,7 +2,8 @@
   "kafka": {
     "bootstrap_servers": "10.100.0.211:9092",
     "topic": "unionTargetPb",
-    "ais_static_topic": "aisStaticInfoJsTest"
+    "ais_static_topic": "aisStaticInfoJsTest",
+    "bds_topic": "bds_ShanDong_changdao"
   },
   "mysql": {
     "host": "10.100.0.14",
@@ -66,11 +67,27 @@
       "update": 2,
       "delete": 3
     },
-    "province": {
-      "海南": 12,
-      "环渤海": 11
-
-    },
+    "province": [
+      { "name": "海南", "name_en": "HaiNan", "provinceCode": "460000", "adapterId": 12 },
+      { "name": "广东", "name_en": "GuangDong", "provinceCode": "440000", "adapterId": 14 },
+      { "name": "福建", "name_en": "FuJian", "provinceCode": "350000", "adapterId": 13 },
+      { "name": "山东", "name_en": "ShanDong", "provinceCode": "370000", "adapterId": 15 },
+      { "name": "粤桂琼", "name_en": "YGQ", "provinceCode": "830000", "adapterId": 321 },
+      { "name": "沙上", "name_en": "ShaShang", "provinceCode": "850000", "adapterId": 1201 },
+      { "name": "三亚河", "name_en": "SanYaHe", "provinceCode": "860000", "adapterId": 1202 },
+      { "name": "三亚", "name_en": "SanYa", "provinceCode": "1460200", "adapterId": 139 },
+       { "name": "青海", "name_en": "QingHai", "provinceCode": "630000", "adapterId": 19 },
+       { "name": "江西", "name_en": "JiangXi", "provinceCode": "480000", "adapterId": 136 },
+       { "name": "湖南", "name_en": "HuNanHY", "provinceCode": "430100", "adapterId": 134 },
+      { "name": "惠州", "name_en": "HuiZhou", "provinceCode": "441300", "adapterId": 1402 },
+      { "name": "广西", "name_en": "GuangXi", "provinceCode": "450000", "adapterId": 16 },
+       { "name": "全球AIS", "name_en": "Global", "provinceCode": "000000", "adapterId": 135 },
+      { "name": "环渤海", "name_en": "HeBei", "provinceCode": "130000", "adapterId": 11 },
+      { "name": "辽宁", "name_en": "LiaoNing", "provinceCode": "210000", "adapterId": 18 },
+      { "name": "辽宁渔政", "name_en": "LiaoNingYZ", "provinceCode": "210100", "adapterId": 137 },
+      { "name": "江苏", "name_en": "JiangSu", "provinceCode": "320000", "adapterId": 6 },
+      { "name": "浙江", "name_en": "ZheJiang", "provinceCode": "330000", "adapterId": 17 }
+    ],
     "eTargetType_mapping": [
       { "ui_class": "AIS_A", "ui_state": 1, "eTargetType": 1 },
       { "ui_class": "AIS_A", "ui_state": 2, "eTargetType": 2 },

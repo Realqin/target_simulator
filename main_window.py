@@ -95,6 +95,9 @@ class MainWindow(QWidget):
         self.static_log_group = None
         self.static_log_display = None
 
+        # 新增：用于控制默认模式下首次发送状态的标志
+        self.is_first_send = True
+
         # 定义必填字段和样式
         self.required_fields = ["id", "course", "speed", "longitude", "latitude", "len"]
         self.invalid_style = "border: 1.5px solid red; border-radius: 4px;"
@@ -419,7 +422,7 @@ class MainWindow(QWidget):
         self.inputs = {
             "eTargetType": QComboBox(), "vesselName": QLineEdit(),
             "id": QLineEdit(), "mmsi": QLineEdit(),
-            "bds": QLineEdit(), "shiptype": QComboBox(),
+            "bds": QLineEdit(), "bdsVesselName": QLineEdit(), "shiptype": QComboBox(),
             "course": QLineEdit(), "speed": QLineEdit(),
             "longitude": QLineEdit(), "latitude": QLineEdit(),
             "len": QLineEdit(), "maxLength": QLineEdit(),
@@ -437,13 +440,13 @@ class MainWindow(QWidget):
         for text, value in self.config['ui_options']['dataStatus'].items():
             self.inputs['dataStatus'].addItem(text, value)
         if self.config['ui_options'].get('province'):
-            for text, value in self.config['ui_options']['province'].items():
-                self.inputs['province'].addItem(text, value)
+            for province_item in self.config['ui_options']['province']:
+                self.inputs['province'].addItem(province_item['name'], province_item['adapterId'])
 
         # --- 添加控件到网格布局 ---
         grid_layout.addWidget(QLabel("目标类型:"), 0, 0, Qt.AlignRight)
         grid_layout.addWidget(self.inputs["eTargetType"], 0, 1)
-        grid_layout.addWidget(QLabel("船名:"), 0, 2, Qt.AlignRight)
+        grid_layout.addWidget(QLabel("AIS船名:"), 0, 2, Qt.AlignRight)
         grid_layout.addWidget(self.inputs["vesselName"], 0, 3)
 
         # ID with random button
@@ -473,8 +476,8 @@ class MainWindow(QWidget):
         grid_layout.addWidget(QLabel("北斗号:"), 2, 0, Qt.AlignRight)
         grid_layout.addLayout(bds_layout, 2, 1)
 
-        grid_layout.addWidget(QLabel("船舶类型:"), 2, 2, Qt.AlignRight)
-        grid_layout.addWidget(self.inputs["shiptype"], 2, 3)
+        grid_layout.addWidget(QLabel("北斗船名:"), 2, 2, Qt.AlignRight)
+        grid_layout.addWidget(self.inputs["bdsVesselName"], 2, 3)
 
         len_layout = QHBoxLayout()
         len_layout.addWidget(self.inputs["course"])
@@ -520,6 +523,7 @@ class MainWindow(QWidget):
         self.data_status_checkbox = QCheckBox("默认")
         self.data_status_checkbox.toggled.connect(self.toggle_data_status_lock)
         data_status_layout.addWidget(self.data_status_checkbox)
+        
         grid_layout.addWidget(QLabel("数据状态:"), 6, 2, Qt.AlignRight)
         grid_layout.addLayout(data_status_layout, 6, 3)
 
@@ -666,8 +670,8 @@ class MainWindow(QWidget):
         for text, value in self.config['ui_options']['dataStatus'].items():
             self.static_inputs['dataStatus'].addItem(text, value)
         if self.config['ui_options'].get('province'):
-            for text, value in self.config['ui_options']['province'].items():
-                self.static_inputs['province'].addItem(text, value)
+            for province_item in self.config['ui_options']['province']:
+                self.static_inputs['province'].addItem(province_item['name'], province_item['adapterId'])
 
         # Configure ETA input
         self.static_inputs["eta"].setDisplayFormat("yyyy-MM-dd HH:mm:ss")
@@ -892,6 +896,9 @@ class MainWindow(QWidget):
 
             # 如果是全新开始（而非从暂停中恢复）
             if self.location_calculator is None:
+                # 如果是默认模式，重置首次发送标志
+                if self.data_status_checkbox.isChecked():
+                    self.is_first_send = True
                 try:
                     # 从UI读取初始参数
                     start_lat = float(self.inputs['latitude'].text())
@@ -930,6 +937,7 @@ class MainWindow(QWidget):
         """
         self.sending_timer.stop()
         self.location_calculator = None # 重置计算器
+        self.is_first_send = True # 重置首次发送标志
         self.log_message("发送已终止。")
         self.start_pause_btn.setText("开始发送")
         # self.terminate_btn.setEnabled(False)
@@ -964,6 +972,7 @@ class MainWindow(QWidget):
             self.log_message(f"警告: 字段 '{field_name}' 的值 '{text}' 无效。使用默认值。")
             return default_value
 
+    # 发送一次静态信息（用于实时目标页签）
     def send_one_time_static_info(self):
         """只发送一次AIS静态信息（用于实时目标页签）。"""
         try:
@@ -988,131 +997,205 @@ class MainWindow(QWidget):
 
     def send_realtime_target_data(self):
         """
-        核心函数：计算下一个点，更新UI，然后收集实时目标数据构建消息并发送。
+        核心调度函数：根据目标类型，调用相应的发送函数。
         """
         try:
             # --- 0. 如果计算器存在，则计算并更新位置 ---
             if self.location_calculator:
                 try:
                     interval_s = self.sending_timer.interval() / 1000.0
-                    
-                    # 从UI获取最新的速度和航向，以允许动态调整
                     current_speed = float(self.inputs['speed'].text())
                     current_course = float(self.inputs['course'].text())
                     self.location_calculator.update_params(speed_knots=current_speed, course_degrees=current_course)
-
-                    # 计算下一个点
                     new_lat, new_lon = self.location_calculator.calculate_next_point(interval_s)
-                    
-                    # 将新坐标回填到UI（保留足够的小数位）
                     self.inputs['latitude'].setText(f"{new_lat:.8f}")
                     self.inputs['longitude'].setText(f"{new_lon:.8f}")
-                    # self.log_message(f"计算出新坐标: Lat={new_lat:.8f}, Lon={new_lon:.8f}")
-
                 except (ValueError, TypeError) as e:
-                    self.log_message(f"错误: 无法计算下一个点，请检查速度/航向值。错误: {e}")
-                    # 停止发送以避免错误累积
+                    self.log_message(f"错误: 无法计算下一个点: {e}")
                     self.terminate_sending()
                     return
 
-            # --- 1. 发送 Protobuf 消息 ---
-            target_list = target_pb2.TargetProtoList()
-            target = target_list.list.add()
-
-            # 根据新的映射关系计算 eTargetType
             selected_class = self.inputs['eTargetType'].currentText()
-            selected_state = self.inputs['sost'].currentData()
-            eTargetType_val = 0  # 默认为 TT_UNKNOWN
-            mapping_found = False
-            
-            if 'eTargetType_mapping' in self.config['ui_options']:
-                for rule in self.config['ui_options']['eTargetType_mapping']:
-                    if rule['ui_class'] == selected_class and rule['ui_state'] == selected_state:
-                        eTargetType_val = rule['eTargetType']
-                        mapping_found = True
-                        # self.log_message(f"映射成功: 类型='{selected_class}', 状态={selected_state} -> eTargetType={eTargetType_val}")
-                        break # 找到第一个匹配就停止
-            
-            if not mapping_found:
-                self.log_message(f"警告: 未找到与类型='{selected_class}'和状态={selected_state}匹配的eTargetType映射规则。将使用默认值0。")
 
-            target.id = self.get_field_value("id", int, 0)
-            target.lastTm = int(time.time() * 1000)
-            target.sost = self.inputs['sost'].currentData()
-            target.eTargetType = eTargetType_val # 使用映射后的值
-            if self.inputs['province'].currentIndex() > 0:
-                target.adapterId = self.inputs['province'].currentData()
+            # --- 1. 根据选择的类型决定发送流程 ---
+            # 纯BDS目
+            if selected_class == "BDS":
+                self._send_bds_json_data(selected_class)
+            # 纯RADAR目标
+            elif selected_class == "RADAR":
+                self._send_protobuf_data(selected_class)
+            # 其他混合类型
+            else:
+                # 发送Protobuf
+                self._send_protobuf_data(selected_class)
+                # 如果包含AIS，发送静态信息
+                if "AIS" in selected_class:
+                    self._send_ais_static_data()
+                # 如果包含BDS，发送BDS JSON
+                if "BDS" in selected_class:
+                    self._send_bds_json_data(selected_class)
+            
+            # 在所有消息发送后，更新首次发送标志
+            if self.is_first_send:
+                self.is_first_send = False
 
+        except Exception as e:
+            self.log_message(f"发送过程中发生严重错误: {e}")
+
+    def _send_protobuf_data(self, selected_class):
+        """构建并发送Protobuf消息到unionTargetPb。"""
+        target_list = target_pb2.TargetProtoList()
+        target = target_list.list.add()
+
+        # 填充Protobuf消息
+        selected_state = self.inputs['sost'].currentData()
+        eTargetType_val = 0
+        if 'eTargetType_mapping' in self.config['ui_options']:
+            for rule in self.config['ui_options']['eTargetType_mapping']:
+                if rule['ui_class'] == selected_class and rule['ui_state'] == selected_state:
+                    eTargetType_val = rule['eTargetType']
+                    break
+        
+        target.id = self.get_field_value("id", int, 0)
+        target.lastTm = int(time.time() * 1000)
+        target.sost = self.inputs['sost'].currentData()
+        target.eTargetType = eTargetType_val
+        if self.inputs['province'].currentIndex() > 0:
+            target.adapterId = self.inputs['province'].currentData()
+
+        if self.data_status_checkbox.isChecked():
+            target.status = 1 if self.is_first_send else 2
+        else:
             target.status = self.inputs['dataStatus'].currentData()
 
-            pos_info = target.pos
-            pos_info.id = target.id
-            pos_info.mmsi = self.get_field_value("mmsi", int, 0)
-            pos_info.vesselName = self.get_field_value("vesselName")
-            pos_info.speed = self.get_field_value("speed", float, 0.0)
-            pos_info.course = self.get_field_value("course", float, 0.0)
-            pos_info.len = self.get_field_value("len", int, 0)
-            pos_info.shiptype = self.inputs['shiptype'].currentData()
-            pos_info.geoPtn.longitude = self.get_field_value("longitude", float, 0.0)
-            pos_info.geoPtn.latitude = self.get_field_value("latitude", float, 0.0)
-            target.maxLen = pos_info.len
-            pos_info.displayId = int(target.id) % 100000
-            #填写后会生成雷达目标
-            if "RADAR" in  selected_class :
-                pos_info.id_r = 18
-            pos_info.state =  target.sost
-            pos_info.quality = 100
-            pos_info.period=10
-            pos_info.heading = pos_info.course
-            pos_info.s_class = self.inputs['eTargetType'].currentData()
-            pos_info.m_mmsi = pos_info.mmsi
-            pos_info.aidtype = 1
-            target.adapterId=self.inputs['province'].currentData()
+        pos_info = target.pos
+        pos_info.id = target.id
+        pos_info.mmsi = self.get_field_value("mmsi", int, 0)
+        pos_info.vesselName = self.get_field_value("vesselName")
+        pos_info.speed = self.get_field_value("speed", float, 0.0)
+        pos_info.course = self.get_field_value("course", float, 0.0)
+        pos_info.len = self.get_field_value("len", int, 0)
+        pos_info.shiptype = self.inputs['shiptype'].currentData()
+        pos_info.geoPtn.longitude = self.get_field_value("longitude", float, 0.0)
+        pos_info.geoPtn.latitude = self.get_field_value("latitude", float, 0.0)
+        target.maxLen = pos_info.len
+        pos_info.displayId = int(target.id) % 100000
+        if "RADAR" in selected_class:
+            pos_info.id_r = 18
+        pos_info.state = target.sost
+        pos_info.quality = 100
+        pos_info.period = 10
+        pos_info.heading = pos_info.course
+        pos_info.s_class = self.inputs['eTargetType'].currentData()
+        pos_info.m_mmsi = pos_info.mmsi
+        pos_info.aidtype = 1
+        target.adapterId = self.inputs['province'].currentData()
 
-
-
-            if self.inputs["radarSource"].text():
-                source = target.sources.add()
-                source.provider = "HLX"
-                source.type = "RADAR"
-                source.ids.append(self.inputs["radarSource"].text())
-            if self.inputs["aisSource"].text():
-                source = target.sources.add()
-                source.provider = "HLX"
-                source.type = "AIS"
-                source.ids.append(self.inputs["aisSource"].text())
-            if self.inputs["bdSource"].text():
-                source = target.sources.add()
-                source.provider = "HLX"
-                source.type = "BDS"
-                source.ids.append(self.inputs["bdSource"].text())
-
-            if self.inputs["radarSource"].text():
+        # 填充 sources 和 vecFusionedTargetInfo
+        # 处理雷达信息源
+        radar_source_text = self.inputs["radarSource"].text().strip()
+        if radar_source_text:
+            source = target.sources.add()
+            source.provider = "HLX"
+            source.type = "RADAR"
+            radar_ids = [id.strip() for id in radar_source_text.split(',') if id.strip()]
+            for radar_id in radar_ids:
+                source.ids.append(radar_id)
                 info = target.vecFusionedTargetInfo.add()
                 info.uiStationType = 82  # 'R'
                 info.ullPosUpdateTime = target.lastTm
                 info.ullUniqueId = target.id
-                info.uiStationId = int(self.inputs["radarSource"].text())
-            if self.inputs["aisSource"].text():
+                info.uiStationId = int(radar_id)
+
+        # 处理AIS信息源
+        ais_source_text = self.inputs["aisSource"].text().strip()
+        if ais_source_text:
+            source = target.sources.add()
+            source.provider = "HLX"
+            source.type = "AIS"
+            ais_ids = [id.strip() for id in ais_source_text.split(',') if id.strip()]
+            for ais_id in ais_ids:
+                source.ids.append(ais_id)
                 info = target.vecFusionedTargetInfo.add()
                 info.uiStationType = 65  # 'A'
                 info.ullPosUpdateTime = target.lastTm
                 info.ullUniqueId = target.id
-                info.uiStationId = int(self.inputs["aisSource"].text())
-            if self.inputs["bdSource"].text():
+                info.uiStationId = int(ais_id)
+
+        # 处理北斗信息源
+        bd_source_text = self.inputs["bdSource"].text().strip()
+        if bd_source_text:
+            source = target.sources.add()
+            source.provider = "HLX"
+            source.type = "BDS"
+            bd_ids = [id.strip() for id in bd_source_text.split(',') if id.strip()]
+            for bd_id in bd_ids:
+                source.ids.append(bd_id)
                 info = target.vecFusionedTargetInfo.add()
                 info.ullPosUpdateTime = target.lastTm
                 info.ullUniqueId = target.id
-                info.uiStationId = int(self.inputs["bdSource"].text())
+                info.uiStationId = int(bd_id)
 
-            self.log_message("构造的 Protobuf 消息内容:\n" + str(target).strip())
-            pb_data = target_list.SerializeToString()
-            topic = self.config['kafka']['topic']
-            self.kafka_producer.send_message(topic, pb_data)
-            self.log_message(f"已向 Topic '{topic}' 发送 Protobuf 消息。")
+        self.log_message("构造的 Protobuf 消息内容:\n" + str(target).strip())
+        pb_data = target_list.SerializeToString()
+        topic = self.config['kafka']['topic']
+        self.kafka_producer.send_message(topic, pb_data)
+        self.log_message(f"已向 Topic '{topic}' 发送 Protobuf 消息。")
 
-        except Exception as e:
-            self.log_message(f"发送过程中发生严重错误: {e}")
+    def _send_ais_static_data(self):
+        """构建并发送AIS静态信息JSON。"""
+        mmsi = self.get_field_value("mmsi")
+        if not mmsi:
+            self.log_message("信息: MMSI为空，跳过发送AIS静态信息。")
+            return
+        
+        static_topic = self.config['kafka'].get('ais_static_topic')
+        if not static_topic:
+            self.log_message("警告: 在 config.json 中未找到 'ais_static_topic'。")
+            return
+
+        ais_info = {"MMSI": mmsi, "Vessel Name": self.get_field_value("vesselName")}
+        json_payload = {"AisExts": [ais_info]}
+        json_data = json.dumps(json_payload, ensure_ascii=False, indent=2)
+        
+        self.kafka_producer.send_message(static_topic, json_data.encode('utf-8'))
+        self.log_message(f"已向 Topic '{static_topic}' 发送AIS静态JSON消息。")
+
+    def _send_bds_json_data(self, selected_class):
+        """构建并发送BDS位置JSON。"""
+        bds_topic = self.config['kafka'].get('bds_topic')
+        if not bds_topic:
+            self.log_message("警告: 在 config.json 中未找到 'bds_topic'。")
+            return
+
+        province_name_en = "Unknown"
+        selected_adapter_id = self.inputs['province'].currentData()
+        province_list = self.config['ui_options'].get('province', [])
+        for province_item in province_list:
+            if province_item['adapterId'] == selected_adapter_id:
+                province_name_en = province_item['name_en']
+                break
+        
+        bds_payload = {
+            "altitude": 0, "communicate": 0,
+            "course": self.get_field_value("course", float, 0.0),
+            "disassemble": 0, "distress": 0, "jobType": "",
+            "latitude": self.get_field_value("latitude", float, 0.0),
+            "longitude": self.get_field_value("longitude", float, 0.0),
+            "online": 0, "power": 0, "provider": "",
+            "province": province_name_en,
+            "shipLength": self.get_field_value("len", float, 0.0),
+            "shipName": self.get_field_value("bdsVesselName"),
+            "source": 2, "speed": self.get_field_value("speed", float, 0.0),
+            "status": 0, "terminal": self.get_field_value("bds"),
+            "tilt": 0, "utc": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        }
+        
+        json_data = json.dumps(bds_payload, ensure_ascii=False, indent=2)
+        self.kafka_producer.send_message(bds_topic, json_data.encode('utf-8'))
+        self.log_message(f"已向 Topic '{bds_topic}' 发送 BDS JSON 消息。")
+        if selected_class == "BDS":
+            self.log_message("构造的 BDS JSON 消息内容:\n" + json_data)
 
     # ===================================================================
     # 静态信息 - 逻辑 (DUPLICATED)
@@ -1213,7 +1296,7 @@ class MainWindow(QWidget):
     def _recognize_and_fill_generic(self, paste_widget, inputs_dict, logger):
         content = paste_widget.toPlainText()
         if not content: return
-        label_map = { "目标类型": "eTargetType", "船名": "vesselName", "ID": "id", "MMSI": "mmsi", "北斗号": "bds", "船舶类型": "shiptype", "航向": "course", "航速": "speed", "经度": "longitude", "纬度": "latitude", "船长": "len", "最大船长": "maxLength", "目标状态": "sost", "数据状态": "dataStatus", "设备分类": "deviceCategory", "船籍": "nationality", "IMO": "imo", "呼号": "callSign", "船宽": "shipWidth", "吃水": "draught", "艏向": "heading", "预到时间": "eta", "目的地": "destination", "AIS信息源":"aisSource","北斗信息源":"bdSource","雷达信息源":"radarSource","省份":"province" }
+        label_map = { "目标类型": "eTargetType", "AIS船名": "vesselName", "ID": "id", "MMSI": "mmsi", "北斗号": "bds", "北斗船名": "bdsVesselName", "船舶类型": "shiptype", "航向": "course", "航速": "speed", "经度": "longitude", "纬度": "latitude", "船长": "len", "最大船长": "maxLength", "目标状态": "sost", "数据状态": "dataStatus", "设备分类": "deviceCategory", "船籍": "nationality", "IMO": "imo", "呼号": "callSign", "船宽": "shipWidth", "吃水": "draught", "艏向": "heading", "预到时间": "eta", "目的地": "destination", "AIS信息源":"aisSource","北斗信息源":"bdSource","雷达信息源":"radarSource","省份":"province" }
         numeric_fields = { "course", "speed", "longitude", "latitude", "len", "maxLength", "shipWidth", "draught", "heading" }
         filled_fields = []
         for line in content.splitlines():
@@ -1344,8 +1427,30 @@ class MainWindow(QWidget):
                 "sources": [], "fusionTargets": []
             }
             
-            if inputs_dict["radarSource"].text(): ui_data["sources"].append({"provider": "HLX", "type": "RADAR", "ids": [inputs_dict["radarSource"].text()]})
-            if inputs_dict["aisSource"].text(): ui_data["sources"].append({"provider": "HLX", "type": "AIS", "ids": [inputs_dict["aisSource"].text()]})
+            # 处理信息源
+            radar_source_text = inputs_dict["radarSource"].text().strip()
+            if radar_source_text:
+                radar_ids = [id.strip() for id in radar_source_text.split(',') if id.strip()]
+                if radar_ids:
+                    ui_data["sources"].append({"provider": "HLX", "type": "RADAR", "ids": radar_ids})
+                    for radar_id in radar_ids:
+                        ui_data["fusionTargets"].append({
+                            "provider": "HLX", "stationId": int(radar_id), "stationType": "RADAR",
+                            "targetId": int(ui_data["id"]) if ui_data["id"] else 0,
+                            "updateTime": ui_data["lastTm"]
+                        })
+
+            ais_source_text = inputs_dict["aisSource"].text().strip()
+            if ais_source_text:
+                ais_ids = [id.strip() for id in ais_source_text.split(',') if id.strip()]
+                if ais_ids:
+                    ui_data["sources"].append({"provider": "HLX", "type": "AIS", "ids": ais_ids})
+                    for ais_id in ais_ids:
+                        ui_data["fusionTargets"].append({
+                            "provider": "HLX", "stationId": int(ais_id), "stationType": "AIS",
+                            "targetId": int(ui_data["id"]) if ui_data["id"] else 0,
+                            "updateTime": ui_data["lastTm"]
+                        })
 
             logger("从UI收集的数据:\n" + json.dumps(ui_data, indent=2, ensure_ascii=False))
 
@@ -1711,84 +1816,7 @@ class MainWindow(QWidget):
             self.db.close()
         event.accept()
 
-    # 不需要
-    @pyqtSlot()
-    def assemble_and_preview(self):
-        """
-        从UI收集数据，使用data_assembler进行组装，
-        然后压缩、编码并显示结果，模拟发送。
-        """
-        try:
-            # 1. 从UI收集数据到一个字典
-            ui_data = {
-                "id": self.get_field_value("id"),
-                "lastTm": int(time.time() * 1000), # 使用毫秒时间戳
-                "maxLen": self.get_field_value("maxLength", int, 0),
-                "status": self.inputs["dataStatus"].currentText().upper(),
-                "displayId": self.get_field_value("id", int, 0) % 100000, # 简单处理
-                "mmsi": self.get_field_value("mmsi", int, 0),
-                "idR": 0, # 暂无此输入
-                "state": self.inputs['sost'].currentData(),
-                "adapterId": self.inputs['province'].currentData(),
-                "quality": 100, # 默认值
-                "course": self.get_field_value("course", float, 0.0),
-                "speed": self.get_field_value("speed", float, 0.0),
-                "heading": self.get_field_value("heading", float, 0.0),
-                "len": self.get_field_value("len", int, 0),
-                "wid": self.get_field_value("shipWidth", int, 0),
-                "shipType": self.inputs['shiptype'].currentData(),
-                "flags": 0, # 默认值
-                "mMmsi": self.get_field_value("mmsi", int, 0), # 假设与mmsi相同
-                "vesselName": self.get_field_value("vesselName"),
-                "latitude": self.get_field_value("latitude", float, 0.0),
-                "longitude": self.get_field_value("longitude", float, 0.0),
-                "aisBaseInfo": {
-                    "Call_Sign": self.get_field_value("callSign"),
-                    "IMO": self.get_field_value("imo"),
-                    "Destination": self.get_field_value("destination")
-                },
-                "sources": [],
-                "fusionTargets": []
-            }
-            
-            # 添加 sources
-            if self.inputs["radarSource"].text():
-                ui_data["sources"].append({
-                    "provider": "HLX", "type": "RADAR", "ids": [self.inputs["radarSource"].text()]
-                })
-            if self.inputs["aisSource"].text():
-                ui_data["sources"].append({
-                    "provider": "HLX", "type": "AIS", "ids": [self.inputs["aisSource"].text()]
-                })
-
-            self.log_message("从UI收集的数据:\n" + json.dumps(ui_data, indent=2, ensure_ascii=False))
-
-            # 2. 使用 data_assembler.py 中的函数进行组装
-            proto_message = assemble_proto_from_data(ui_data)
-            self.log_message("组装后的Protobuf消息:\n" + str(proto_message).strip())
-
-            # 3. 序列化 Protobuf 消息
-            serialized_data = proto_message.SerializeToString()
-
-            # 4. 使用 zlib 压缩
-            compressed_data = zlib.compress(serialized_data)
-
-            # 5. 转换为十六进制字符串以便显示
-            hex_output = binascii.hexlify(compressed_data).decode('ascii')
-            
-            # 格式化输出，每行显示32个字符（16个字节）
-            formatted_hex = ' '.join(hex_output[i:i+2] for i in range(0, len(hex_output), 2))
-            
-            self.log_message("------ 组装、压缩、编码后的结果 (Hex) ------")
-            # 为了更好的可读性，分行显示
-            chunk_size = 32 * 3 - 1 # 32个字节，每个字节2个hex字符+1个空格
-            for i in range(0, len(formatted_hex), chunk_size):
-                 self.log_message(formatted_hex[i:i+chunk_size])
-            self.log_message("-------------------------------------------------")
-
-
-        except Exception as e:
-            self.log_message(f"组装过程中发生严重错误: {e}")
+    
 
     @pyqtSlot()
     def save_initial_target(self):
