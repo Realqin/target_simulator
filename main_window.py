@@ -10,7 +10,8 @@ from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QGridLayout, QGroupBox, QTextEdit, QSpacerItem, QSizePolicy,
     QComboBox, QCheckBox, QTabWidget, QTableWidget, QTableWidgetItem,
-    QHeaderView, QGraphicsView, QGraphicsScene, QDateTimeEdit, QGraphicsEllipseItem, QApplication
+    QHeaderView, QGraphicsView, QGraphicsScene, QDateTimeEdit, QGraphicsEllipseItem, QApplication,
+    QRadioButton, QMessageBox
 )
 from PyQt5.QtCore import pyqtSlot, QTimer, Qt, QDateTime
 from PyQt5.QtGui import QIcon, QCursor, QPen, QBrush, QColor, QPainter, QPainterPath
@@ -81,6 +82,15 @@ class MainWindow(QWidget):
         # 创建一个定时器，用于周期性地发送数据
         self.sending_timer = QTimer(self)
         self.sending_timer.timeout.connect(self.send_realtime_target_data)
+
+        # 目标关联计时器
+        self.association_timer = QTimer(self)
+        self.association_timer.timeout.connect(self.update_association_timer)
+        self.association_seconds = 0
+
+        # 模拟计算计时器
+        self.simulation_timer = QTimer(self)
+        self.simulation_timer.timeout.connect(self.update_simulation)
 
         # 为静态信息页签创建独立的状态
         self.static_inputs = {}
@@ -227,6 +237,8 @@ class MainWindow(QWidget):
         left_v_layout.addWidget(self.create_target_info_group())
         # 创建并添加信息源模块
         left_v_layout.addWidget(self.create_source_input_group())
+        # 创建并添加目标关联模块
+        left_v_layout.addWidget(self.create_association_group())
         left_v_layout.addStretch(1)
 
         # --- 添加初始化按钮 ---
@@ -586,6 +598,60 @@ class MainWindow(QWidget):
         group_box.setLayout(grid_layout)
         return group_box
 
+    def create_association_group(self):
+        """创建目标关联模块"""
+        group_box = QGroupBox("目标关联")
+        main_layout = QHBoxLayout()
+        main_layout.setSpacing(30)  # Add spacing between widgets
+
+        # 时长显示
+        self.association_time_label = QLabel("时长：0 秒")
+        main_layout.addWidget(self.association_time_label)
+
+        # 关联选项
+        self.association_options = {
+            "none": QRadioButton("无关联"),
+            "constant": QRadioButton("匀速"),
+            "decelerate": QRadioButton("均减速"),
+            "accelerate": QRadioButton("均加速")
+        }
+        self.association_options["none"].setChecked(True)
+        self.association_options["none"].toggled.connect(self.handle_association_option_change)
+
+        main_layout.addWidget(self.association_options["none"])
+        main_layout.addWidget(self.association_options["constant"])
+        main_layout.addWidget(self.association_options["decelerate"])
+
+        # 减速布局
+        decelerate_widget = QWidget()
+        decelerate_layout = QHBoxLayout(decelerate_widget)
+        decelerate_layout.setContentsMargins(0, 0, 0, 0)
+        decelerate_layout.setSpacing(10)
+        decelerate_layout.addWidget(self.association_options["decelerate"])
+        self.decelerate_input = QLineEdit("0.1")
+        self.decelerate_input.setFixedWidth(60)
+        decelerate_layout.addWidget(self.decelerate_input)
+        decelerate_layout.addWidget(QLabel("节/分钟"))
+        main_layout.addWidget(decelerate_widget)
+
+        main_layout.addWidget(self.association_options["accelerate"])
+
+        # 加速布局
+        accelerate_widget = QWidget()
+        accelerate_layout = QHBoxLayout(accelerate_widget)
+        accelerate_layout.setContentsMargins(0, 0, 0, 0)
+        accelerate_layout.setSpacing(5)
+        accelerate_layout.addWidget(self.association_options["accelerate"])
+        self.accelerate_input = QLineEdit("0.1")
+        self.accelerate_input.setFixedWidth(60)
+        accelerate_layout.addWidget(self.accelerate_input)
+        accelerate_layout.addWidget(QLabel("节/分钟"))
+        main_layout.addWidget(accelerate_widget)
+
+        main_layout.addStretch()
+        group_box.setLayout(main_layout)
+        return group_box
+
     def create_control_group(self):
         """创建方向控制和操作按钮模块"""
         group_box = QGroupBox("控制与操作")
@@ -855,15 +921,7 @@ class MainWindow(QWidget):
         widget.setStyleSheet(self.default_lineedit_style)
 
     def toggle_sending_state(self):
-        """
-        切换发送状态（开始/暂停/继续）。
-        - 执行必填项校验。
-        - 如果是雷达目标，清空船名、MMSI、北斗号。
-        - 点击“开始”或“继续”时，立即发送一次静态信息。
-        - 点击
-开始”时，初始化位置计算器并立即发送第一条实时信息。
-        - 点击“暂停”时，停止定时器。
-        """
+
         # 1. 校验必填项
         if not self.validate_required_fields():
             return # 如果校验失败，则不执行任何操作
@@ -933,29 +991,124 @@ class MainWindow(QWidget):
             self.log_message(f"发送已{'开始' if self.start_pause_btn.text() == '开始发送' else '继续'}，频率: {interval_ms/1000}s/次。")
             self.start_pause_btn.setText("暂停发送")
             self.terminate_btn.setEnabled(True)
-            # 在运行时禁用部分输入的编辑
-            # for key in ['latitude', 'longitude']:
-            #     self.inputs[key].setEnabled(False)
+            
+            # 停止并重置关联计时器
+            self.association_timer.stop()
+            self.association_seconds = 0
+            self.association_time_label.setText("时长：0 秒")
 
         # 如果当前是“运行”状态，则暂停
         else:
             self.sending_timer.stop()
             self.log_message("发送已暂停。")
             self.start_pause_btn.setText("继续发送")
+            if not self.association_options["none"].isChecked():
+                self.association_timer.start(1000) # Start association timer
 
     def terminate_sending(self):
         """
-        终止发送，并重置状态和计算器。
+        终止发送，但保留计算器状态并继续模拟。
+        如果有关联模式，则弹出确认框。
         """
+        # 如果有关联模式，弹出确认框
+        if not self.association_options["none"].isChecked():
+            reply = QMessageBox.question(self, '确认操作', 
+                                           "下一个目标是否需要在当前目标基础上继续��匀/匀加/匀减速？",
+                                           QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+            
+            if reply == QMessageBox.No:
+                # 用户选择“否”，切换回无关联
+                self.association_options["none"].setChecked(True)
+                # The toggled signal will handle stopping timers.
+
+        # --- 无论如何都执行以下操作 ---
         self.sending_timer.stop()
-        self.location_calculator = None # 重置计算器
-        self.is_first_send = True # 重置首次发送标志
+        self.is_first_send = True
+
+        # 发送最后一条带有删除状态的消息
+        self.log_message("发送终止消息 (delete)...")
+        selected_class = self.inputs['eTargetType'].currentText()
+        self._send_protobuf_data(selected_class, override_status=3) # 3 is for delete
+
         self.log_message("发送已终止。")
         self.start_pause_btn.setText("开始发送")
-        # self.terminate_btn.setEnabled(False)
-        # 重新启用所有输入框
-        # for key in ['latitude', 'longitude']:
-        #     self.inputs[key].setEnabled(True)
+        
+        # 如果用户选择了“是”，则关联计时器会在这里启动
+        if not self.association_options["none"].isChecked():
+            self.association_timer.start(1000)
+
+    def update_association_timer(self):
+        """更新目标关联时长"""
+        self.association_seconds += 1
+        self.association_time_label.setText(f"时长：{self.association_seconds} 秒")
+
+    def handle_association_option_change(self, is_checked):
+        """处理关联选项变化"""
+        if is_checked:
+            # "无关联" is selected, stop and reset the timer
+            self.association_timer.stop()
+            self.association_seconds = 0
+            self.association_time_label.setText("时长：0 秒")
+            self.simulation_timer.stop() # Stop simulation
+        else:
+            # Another option is selected. If sending is already paused, start the association timer.
+            if not self.sending_timer.isActive():
+                self.association_timer.start(1000)
+            
+            # Ensure calculator is initialized and start simulation
+            if self.location_calculator is None:
+                try:
+                    self.location_calculator = LocationCalculator(
+                        float(self.inputs['latitude'].text()),
+                        float(self.inputs['longitude'].text()),
+                        float(self.inputs['speed'].text()),
+                        float(self.inputs['course'].text())
+                    )
+                except (ValueError, TypeError):
+                    self.log_message("错误: 无法初始化位置计算器。请确保经纬度、速度和航向为有效的数字。")
+                    self.association_options["none"].setChecked(True) # Revert selection
+                    return
+            self.simulation_timer.start(1000)
+
+    def update_simulation(self):
+        """根据关联模式，实时计算并更新UI上的速度和位置"""
+        if not self.location_calculator:
+            return
+
+        try:
+            current_speed = float(self.inputs['speed'].text())
+            new_speed = current_speed
+
+            if self.association_options["decelerate"].isChecked():
+                rate_per_min = float(self.decelerate_input.text())
+                rate_per_sec = rate_per_min / 60.0
+                new_speed -= rate_per_sec
+                new_speed = max(0, new_speed) # Clamp at 0
+            
+            elif self.association_options["accelerate"].isChecked():
+                rate_per_min = float(self.accelerate_input.text())
+                rate_per_sec = rate_per_min / 60.0
+                new_speed += rate_per_sec
+                new_speed = min(100, new_speed) # Clamp at 100
+
+            # For "constant" speed, new_speed remains unchanged from current_speed
+
+            current_course = float(self.inputs['course'].text())
+            
+            # Update calculator with the new speed
+            self.location_calculator.update_params(speed_knots=new_speed, course_degrees=current_course)
+            
+            # Calculate next point based on a 1-second interval
+            new_lat, new_lon = self.location_calculator.calculate_next_point(1.0)
+            
+            # Update UI
+            self.inputs['speed'].setText(f"{new_speed:.2f}")
+            self.inputs['latitude'].setText(f"{new_lat:.8f}")
+            self.inputs['longitude'].setText(f"{new_lon:.8f}")
+
+        except (ValueError, TypeError) as e:
+            self.log_message(f"错误: 模拟计算失败 - {e}")
+            self.simulation_timer.stop()
 
     def toggle_data_status_lock(self, is_checked):
         self._toggle_data_status_lock_generic(is_checked, self.inputs["dataStatus"])
@@ -1009,24 +1162,9 @@ class MainWindow(QWidget):
 
     def send_realtime_target_data(self):
         """
-        核心调度函数：根据目标类型，调用相应的发送函数。
+        核心调度函数：读取UI上的当前值，并根据目标类型调用相应的发送函数。
         """
         try:
-            # --- 0. 如果计算器存在，则计算并更新位置 ---
-            if self.location_calculator:
-                try:
-                    interval_s = self.sending_timer.interval() / 1000.0
-                    current_speed = float(self.inputs['speed'].text())
-                    current_course = float(self.inputs['course'].text())
-                    self.location_calculator.update_params(speed_knots=current_speed, course_degrees=current_course)
-                    new_lat, new_lon = self.location_calculator.calculate_next_point(interval_s)
-                    self.inputs['latitude'].setText(f"{new_lat:.8f}")
-                    self.inputs['longitude'].setText(f"{new_lon:.8f}")
-                except (ValueError, TypeError) as e:
-                    self.log_message(f"错误: 无法计算下一个点: {e}")
-                    self.terminate_sending()
-                    return
-
             selected_class = self.inputs['eTargetType'].currentText()
 
             # --- 1. 根据选择的类型决定发送流程 ---
@@ -1054,7 +1192,7 @@ class MainWindow(QWidget):
         except Exception as e:
             self.log_message(f"发送过程中发生严重错误: {e}")
 
-    def _send_protobuf_data(self, selected_class):
+    def _send_protobuf_data(self, selected_class, override_status=None):
         """构建并发送Protobuf消息到unionTargetPb。"""
         target_list = target_pb2.TargetProtoList()
         target = target_list.list.add()
@@ -1079,7 +1217,9 @@ class MainWindow(QWidget):
         if self.inputs['province'].currentIndex() > 0:
             target.adapterId = self.inputs['province'].currentData()
 
-        if self.data_status_checkbox.isChecked():
+        if override_status is not None:
+            target.status = override_status
+        elif self.data_status_checkbox.isChecked():
             target.status = 1 if self.is_first_send else 2
         else:
             target.status = self.inputs['dataStatus'].currentData()
@@ -1298,8 +1438,9 @@ class MainWindow(QWidget):
                     "Nationality": get_static_val("nationality"),
                     "IMO": get_static_val("imo"),
                     "Call_Sign": get_static_val("callSign"),
-                    # "LengthRealTime": str(get_static_val("len", float, 0.0)),
-                    "Length": str(get_static_val("len", float, 0.0)),
+                    "LengthRealTime": str(get_static_val("len", float, 0.0)),
+
+                    # "Length": str(get_static_val("len", float, 0.0)),
                     "Wide": str(get_static_val("shipWidth",float, 0.0)),
                     "Draught": get_static_val("draught"),
                     "Ship Type": self.static_inputs["shiptype"].currentText(),
