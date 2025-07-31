@@ -99,7 +99,7 @@ class MainWindow(QWidget):
         self.is_first_send = True
 
         # 定义必填字段和样式
-        self.required_fields = ["id", "course", "speed", "longitude", "latitude", "len"]
+        self.required_fields = ["course", "speed", "longitude", "latitude", "len"]
         self.invalid_style = "border: 1.5px solid red; border-radius: 4px;"
         self.default_lineedit_style = ""
         self.load_and_extract_styles()
@@ -422,7 +422,7 @@ class MainWindow(QWidget):
         self.inputs = {
             "eTargetType": QComboBox(), "vesselName": QLineEdit(),
             "id": QLineEdit(), "mmsi": QLineEdit(),
-            "bds": QLineEdit(), "bdsVesselName": QLineEdit(), "shiptype": QComboBox(),
+            "bds": QLineEdit(), "shipName": QLineEdit(), "shiptype": QComboBox(),
             "course": QLineEdit(), "speed": QLineEdit(),
             "longitude": QLineEdit(), "latitude": QLineEdit(),
             "len": QLineEdit(), "maxLength": QLineEdit(),
@@ -446,26 +446,44 @@ class MainWindow(QWidget):
         # --- 添加控件到网格布局 ---
         grid_layout.addWidget(QLabel("目标类型:"), 0, 0, Qt.AlignRight)
         grid_layout.addWidget(self.inputs["eTargetType"], 0, 1)
-        grid_layout.addWidget(QLabel("AIS船名:"), 0, 2, Qt.AlignRight)
-        grid_layout.addWidget(self.inputs["vesselName"], 0, 3)
 
-        # ID with random button
         id_layout = QHBoxLayout()
         id_layout.addWidget(self.inputs["id"])
         random_id_btn = QPushButton("随机")
         random_id_btn.clicked.connect(lambda: self._generate_random_value("id", "ID", self.inputs, self.log_message))
         id_layout.addWidget(random_id_btn)
-        grid_layout.addWidget(QLabel("ID:"), 1, 0, Qt.AlignRight)
-        grid_layout.addLayout(id_layout, 1, 1)
+        grid_layout.addWidget(QLabel("ID:"), 0, 2, Qt.AlignRight)
+        grid_layout.addLayout(id_layout, 0, 3)
 
-        # MMSI with random button
+
         mmsi_layout = QHBoxLayout()
         mmsi_layout.addWidget(self.inputs["mmsi"])
         random_mmsi_btn = QPushButton("随机")
         random_mmsi_btn.clicked.connect(lambda: self._generate_random_value("mmsi", "MMSI", self.inputs, self.log_message))
         mmsi_layout.addWidget(random_mmsi_btn)
-        grid_layout.addWidget(QLabel("MMSI:"), 1, 2, Qt.AlignRight)
-        grid_layout.addLayout(mmsi_layout, 1, 3)
+        grid_layout.addWidget(QLabel("MMSI:"), 1, 0, Qt.AlignRight)
+        grid_layout.addLayout(mmsi_layout, 1, 1)
+
+        grid_layout.addWidget(QLabel("AIS船名:"), 1, 2, Qt.AlignRight)
+        grid_layout.addWidget(self.inputs["vesselName"], 1, 3)
+
+        # ID with random button
+        # id_layout = QHBoxLayout()
+        # id_layout.addWidget(self.inputs["id"])
+        # random_id_btn = QPushButton("随机")
+        # random_id_btn.clicked.connect(lambda: self._generate_random_value("id", "ID", self.inputs, self.log_message))
+        # id_layout.addWidget(random_id_btn)
+        # grid_layout.addWidget(QLabel("ID:"), 1, 0, Qt.AlignRight)
+        # grid_layout.addLayout(id_layout, 1, 1)
+
+        # MMSI with random button
+        # mmsi_layout = QHBoxLayout()
+        # mmsi_layout.addWidget(self.inputs["mmsi"])
+        # random_mmsi_btn = QPushButton("随机")
+        # random_mmsi_btn.clicked.connect(lambda: self._generate_random_value("mmsi", "MMSI", self.inputs, self.log_message))
+        # mmsi_layout.addWidget(random_mmsi_btn)
+        # grid_layout.addWidget(QLabel("MMSI:"), 1, 2, Qt.AlignRight)
+        # grid_layout.addLayout(mmsi_layout, 1, 3)
 
         # BDS with random button
         bds_layout = QHBoxLayout()
@@ -477,19 +495,20 @@ class MainWindow(QWidget):
         grid_layout.addLayout(bds_layout, 2, 1)
 
         grid_layout.addWidget(QLabel("北斗船名:"), 2, 2, Qt.AlignRight)
-        grid_layout.addWidget(self.inputs["bdsVesselName"], 2, 3)
-
-        len_layout = QHBoxLayout()
-        len_layout.addWidget(self.inputs["course"])
-        len_layout.addWidget(QLabel("度"))
-        grid_layout.addWidget(QLabel("航向:"), 3, 0, Qt.AlignRight)
-        grid_layout.addLayout(len_layout, 3, 1)
+        grid_layout.addWidget(self.inputs["shipName"], 2, 3)
 
         len_layout = QHBoxLayout()
         len_layout.addWidget(self.inputs["speed"])
         len_layout.addWidget(QLabel("节"))
-        grid_layout.addWidget(QLabel("航速:"), 3, 2, Qt.AlignRight)
+        grid_layout.addWidget(QLabel("航速:"), 3, 0, Qt.AlignRight)
+        grid_layout.addLayout(len_layout, 3, 1)
+
+        len_layout = QHBoxLayout()
+        len_layout.addWidget(self.inputs["course"])
+        len_layout.addWidget(QLabel("度"))
+        grid_layout.addWidget(QLabel("航向:"), 3, 2, Qt.AlignRight)
         grid_layout.addLayout(len_layout, 3, 3)
+
 
         len_layout = QHBoxLayout()
         len_layout.addWidget(self.inputs["longitude"])
@@ -515,20 +534,25 @@ class MainWindow(QWidget):
         grid_layout.addWidget(QLabel("最大船长:"), 5, 2, Qt.AlignRight)
         grid_layout.addLayout(max_len_layout, 5, 3)
 
-        grid_layout.addWidget(QLabel("目标状态:"), 6, 0, Qt.AlignRight)
-        grid_layout.addWidget(self.inputs["sost"], 6, 1)
-        
+        grid_layout.addWidget(QLabel("船舶类型:"), 6, 0, Qt.AlignRight)
+        grid_layout.addWidget(self.inputs["shiptype"], 6, 1)
+
+        grid_layout.addWidget(QLabel("目标状态:"), 6, 2, Qt.AlignRight)
+        grid_layout.addWidget(self.inputs["sost"], 6, 3)
+
+        grid_layout.addWidget(QLabel("省份:"), 7, 0, Qt.AlignRight)
+        grid_layout.addWidget(self.inputs["province"], 7, 1)
+
         data_status_layout = QHBoxLayout()
         data_status_layout.addWidget(self.inputs["dataStatus"])
         self.data_status_checkbox = QCheckBox("默认")
         self.data_status_checkbox.toggled.connect(self.toggle_data_status_lock)
         data_status_layout.addWidget(self.data_status_checkbox)
         
-        grid_layout.addWidget(QLabel("数据状态:"), 6, 2, Qt.AlignRight)
-        grid_layout.addLayout(data_status_layout, 6, 3)
+        grid_layout.addWidget(QLabel("数据状态:"), 7, 2, Qt.AlignRight)
+        grid_layout.addLayout(data_status_layout, 7, 3)
 
-        grid_layout.addWidget(QLabel("省份:"), 7, 0, Qt.AlignRight)
-        grid_layout.addWidget(self.inputs["province"], 7, 1)
+
 
         # 为必填字段的输入变化连接信号，以便实时清除错误样式
         for field_name in self.required_fields:
@@ -872,12 +896,24 @@ class MainWindow(QWidget):
         selected_class = self.inputs['eTargetType'].currentText()
         if "RADAR" == selected_class:
             self.inputs['vesselName'].setText("")
+            self.inputs['shipName'].setText("")
             self.inputs['mmsi'].setText("")
             self.inputs['bds'].setText("")
             # self.log_message("检测到雷达目标，已清空船名、MMSI和北斗号。")
 
+        if "BDS" == selected_class:
+            self.inputs['vesselName'].setText("")
+            self.inputs['bds'].setText("")
+            self.inputs['id'].setText("")
+
         if "BDS" not in selected_class :
             self.inputs['bds'].setText("")
+            self.inputs['shipName'].setText("")
+
+        if "AIS" not in selected_class :
+            self.inputs['mmsi'].setText("")
+            self.inputs['vesselName'].setText("")
+
 
 
         # 3. 如果当前是“终止”或“暂停”状态，则准备开始或继续
@@ -1057,6 +1093,10 @@ class MainWindow(QWidget):
                     break
         
         target.id = self.get_field_value("id", int, 0)
+        # 如果是非纯北斗目标，则自动生成ID
+        if (target.id == 0) & (selected_class != "BDS"):
+            self._generate_random_value("id", "ID", self.inputs, self.log_message)
+            target.id = self.get_field_value("id", int, 0)
         target.lastTm = int(time.time() * 1000)
         target.sost = self.inputs['sost'].currentData()
         target.eTargetType = eTargetType_val
@@ -1071,6 +1111,10 @@ class MainWindow(QWidget):
         pos_info = target.pos
         pos_info.id = target.id
         pos_info.mmsi = self.get_field_value("mmsi", int, 0)
+        # 如果包含ais且MMSI为空，则自动生成MMSI
+        if (pos_info.mmsi == 0) & ("AIS" in selected_class):
+            self._generate_random_value("mmsi", "MMSI", self.inputs, self.log_message)
+            pos_info.mmsi = self.get_field_value("mmsi", int, 0)
         pos_info.vesselName = self.get_field_value("vesselName")
         pos_info.speed = self.get_field_value("speed", float, 0.0)
         pos_info.course = self.get_field_value("course", float, 0.0)
@@ -1123,18 +1167,18 @@ class MainWindow(QWidget):
                 info.uiStationId = int(ais_id)
 
         # 处理北斗信息源
-        bd_source_text = self.inputs["bdSource"].text().strip()
-        if bd_source_text:
-            source = target.sources.add()
-            source.provider = "HLX"
-            source.type = "BDS"
-            bd_ids = [id.strip() for id in bd_source_text.split(',') if id.strip()]
-            for bd_id in bd_ids:
-                source.ids.append(bd_id)
-                info = target.vecFusionedTargetInfo.add()
-                info.ullPosUpdateTime = target.lastTm
-                info.ullUniqueId = target.id
-                info.uiStationId = int(bd_id)
+        # bd_source_text = self.inputs["bdSource"].text().strip()
+        # if bd_source_text:
+        #     source = target.sources.add()
+        #     source.provider = "HLX"
+        #     source.type = "BDS"
+        #     bd_ids = [id.strip() for id in bd_source_text.split(',') if id.strip()]
+        #     for bd_id in bd_ids:
+        #         source.ids.append(bd_id)
+        #         info = target.vecFusionedTargetInfo.add()
+        #         info.ullPosUpdateTime = target.lastTm
+        #         info.ullUniqueId = target.id
+        #         info.uiStationId = int(bd_id)
 
         self.log_message("构造的 Protobuf 消息内容:\n" + str(target).strip())
         pb_data = target_list.SerializeToString()
@@ -1175,19 +1219,25 @@ class MainWindow(QWidget):
             if province_item['adapterId'] == selected_adapter_id:
                 province_name_en = province_item['name_en']
                 break
-        
+
+
+        terminal= self.get_field_value("bds", float, 0.0)
+        if terminal ==0:
+            self._generate_random_value("bds", "BDS", self.inputs, self.log_message)
+            terminal = self.get_field_value("bds", float, 0.0)
+
         bds_payload = {
             "altitude": 0, "communicate": 0,
             "course": self.get_field_value("course", float, 0.0),
             "disassemble": 0, "distress": 0, "jobType": "",
             "latitude": self.get_field_value("latitude", float, 0.0),
             "longitude": self.get_field_value("longitude", float, 0.0),
-            "online": 0, "power": 0, "provider": "",
+            "online": 0, "power": 0, "provider": self.get_field_value("bdSource", float, 0.0),
             "province": province_name_en,
             "shipLength": self.get_field_value("len", float, 0.0),
-            "shipName": self.get_field_value("bdsVesselName"),
+            "shipName": self.get_field_value("shipName"),
             "source": 2, "speed": self.get_field_value("speed", float, 0.0),
-            "status": 0, "terminal": self.get_field_value("bds"),
+            "status": 0, "terminal":self.get_field_value("bds", float, 0.0),
             "tilt": 0, "utc": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
         }
         
@@ -1296,7 +1346,7 @@ class MainWindow(QWidget):
     def _recognize_and_fill_generic(self, paste_widget, inputs_dict, logger):
         content = paste_widget.toPlainText()
         if not content: return
-        label_map = { "目标类型": "eTargetType", "AIS船名": "vesselName", "ID": "id", "MMSI": "mmsi", "北斗号": "bds", "北斗船名": "bdsVesselName", "船舶类型": "shiptype", "航向": "course", "航速": "speed", "经度": "longitude", "纬度": "latitude", "船长": "len", "最大船长": "maxLength", "目标状态": "sost", "数据状态": "dataStatus", "设备分类": "deviceCategory", "船籍": "nationality", "IMO": "imo", "呼号": "callSign", "船宽": "shipWidth", "吃水": "draught", "艏向": "heading", "预到时间": "eta", "目的地": "destination", "AIS信息源":"aisSource","北斗信息源":"bdSource","雷达信息源":"radarSource","省份":"province" }
+        label_map = { "目标类型": "eTargetType", "AIS船名": "vesselName", "ID": "id", "MMSI": "mmsi", "北斗号": "bds", "北斗船名": "shipName", "船舶类型": "shiptype", "航向": "course", "航速": "speed", "经度": "longitude", "纬度": "latitude", "船长": "len", "最大船长": "maxLength", "目标状态": "sost", "数据状态": "dataStatus", "设备分类": "deviceCategory", "船籍": "nationality", "IMO": "imo", "呼号": "callSign", "船宽": "shipWidth", "吃水": "draught", "艏向": "heading", "预到时间": "eta", "目的地": "destination", "AIS信息源":"aisSource","北斗信息源":"bdSource","雷达信息源":"radarSource","省份":"province" }
         numeric_fields = { "course", "speed", "longitude", "latitude", "len", "maxLength", "shipWidth", "draught", "heading" }
         filled_fields = []
         for line in content.splitlines():

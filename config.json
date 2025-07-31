@@ -25,23 +25,23 @@
       "AIS_A": 1,
       "AIS_B": 2,
       "BDS": 1,
-      "CCTV": 1,
       "RADAR_AIS_A": 1,
       "RADAR_AIS_B": 2,
       "RADAR_BDS": 1,
-      "RADAR_CCTV": 1,
       "AIS_A_BDS": 1,
       "AIS_B_BDS": 2,
       "RADAR_AIS_A_BDS": 1,
       "RADAR_AIS_B_BDS": 2,
-      "CCTV_AIS": 1,
-      "OTHERS": 1,
       "AID": 71,
       "VAID": 72,
       "RADAR_AID": 71,
       "RADAR_VAID": 72,
       "OBJECT_STATIC_OBJ": 14,
-      "RADAR_OBJECT_STATIC_OBJ": 14
+      "RADAR_OBJECT_STATIC_OBJ": 14,
+      "CCTV": 1,
+      "RADAR_CCTV": 1,
+      "CCTV_AIS": 1,
+       "OTHERS": 1
     },
 
 
