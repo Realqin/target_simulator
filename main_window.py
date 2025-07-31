@@ -19,7 +19,6 @@ import zlib
 import binascii
 from kafka_producer import KProducer
 import target_pb2
-from data_assembler import assemble_proto_from_data
 from database import Database
 from location_calculator import LocationCalculator
 
@@ -646,14 +645,12 @@ class MainWindow(QWidget):
         self.terminate_btn.setEnabled(False)
         clear_btn = QPushButton("清除")
         clear_btn.clicked.connect(self.clear_inputs)
-        assemble_btn = QPushButton("组装并预览")
-        assemble_btn.clicked.connect(self.assemble_and_preview)
+
 
         button_layout.addWidget(self.start_pause_btn)
         button_layout.addWidget(self.terminate_btn)
         button_layout.addWidget(clear_btn)
         v_layout.addLayout(button_layout)
-        v_layout.addWidget(assemble_btn)
         
         group_box.setLayout(v_layout)
         return group_box
@@ -667,42 +664,28 @@ class MainWindow(QWidget):
         grid_layout = QGridLayout()
         grid_layout.setSpacing(10)
 
-        # Initialize the controls for the static tab, ensuring all fields used in send_static_data exist.
+
         self.static_inputs = {
-            "eTargetType": QComboBox(), "vesselName": QLineEdit(), "id": QLineEdit(),
-            "mmsi": QLineEdit(), "bds": QLineEdit(), "shiptype": QComboBox(),
-            "course": QLineEdit(), "speed": QLineEdit(), "longitude": QLineEdit(),
-            "latitude": QLineEdit(), "len": QLineEdit(), "maxLength": QLineEdit(),
-            "sost": QComboBox(), "dataStatus": QComboBox(), "province": QComboBox(),
-            "radarSource": QLineEdit(), "aisSource": QLineEdit(), "bdSource": QLineEdit(),
-            "callSign": QLineEdit(), "imo": QLineEdit(), "shipWidth": QLineEdit(),
-            "draught": QLineEdit(), "destination": QLineEdit(),
+            "mmsi": QLineEdit(), "vesselName": QLineEdit(),
+            "deviceCategory": QComboBox(),"nationality": QLineEdit(),
+            "imo": QLineEdit(), "callSign": QLineEdit(),
+            "len": QLineEdit(),"shipWidth": QLineEdit(),
+            "draught": QLineEdit(),
+            "shiptype": QComboBox(), "destination": QLineEdit(),
             "eta": QDateTimeEdit(QDateTime.currentDateTime()),  # Using QDateTimeEdit for better UX
-            "nationality": QLineEdit(),
-            # Add missing fields that are used in the UI
-            "deviceCategory": QComboBox(),
-            "heading": QLineEdit(),
         }
 
-        # Populate combo boxes to avoid errors on access
-        for text, value in self.config['ui_options']['eTargetType'].items():
-            self.static_inputs['eTargetType'].addItem(text, value)
         for text, value in self.config['ui_options']['shiptype'].items():
             self.static_inputs['shiptype'].addItem(text, value)
-        for text, value in self.config['ui_options']['sost'].items():
-            self.static_inputs['sost'].addItem(text, value)
-        for text, value in self.config['ui_options']['dataStatus'].items():
-            self.static_inputs['dataStatus'].addItem(text, value)
-        if self.config['ui_options'].get('province'):
-            for province_item in self.config['ui_options']['province']:
-                self.static_inputs['province'].addItem(province_item['name'], province_item['adapterId'])
 
         # Configure ETA input
         self.static_inputs["eta"].setDisplayFormat("yyyy-MM-dd HH:mm:ss")
         self.static_inputs["eta"].setCalendarPopup(True)
 
-        # Add default item for deviceCategory
-        self.static_inputs['deviceCategory'].addItem("默认分类")
+        # 从配置文件加载设备分类选项
+        if 'deviceCategory' in self.config['ui_options']:
+            for text, value in self.config['ui_options']['deviceCategory'].items():
+                self.static_inputs['deviceCategory'].addItem(text, value)
 
 
         # --- 添加控件到网格布局 ---
@@ -752,22 +735,18 @@ class MainWindow(QWidget):
         grid_layout.addWidget(QLabel("吃水:"), 4, 0, Qt.AlignRight)
         grid_layout.addLayout(draught_layout, 4, 1)
 
-        heading_layout = QHBoxLayout()
-        heading_layout.addWidget(self.static_inputs["heading"])
-        heading_layout.addWidget(QLabel("度"))
-        grid_layout.addWidget(QLabel("艏向:"), 4, 2, Qt.AlignRight)
-        grid_layout.addLayout(heading_layout, 4, 3)
+
+        grid_layout.addWidget(QLabel("船舶类型:"), 4, 2, Qt.AlignRight)
+        grid_layout.addWidget(self.static_inputs["shiptype"], 4, 3)
 
         # Row 5: ETA and Ship Type
         grid_layout.addWidget(QLabel("预到时间:"), 5, 0, Qt.AlignRight)
         grid_layout.addWidget(self.static_inputs["eta"], 5, 1)
-        
-        grid_layout.addWidget(QLabel("船舶类型:"), 5, 2, Qt.AlignRight)
-        grid_layout.addWidget(self.static_inputs["shiptype"], 5, 3)
+
 
         # Row 6: Destination
-        grid_layout.addWidget(QLabel("目的地:"), 6, 0, Qt.AlignRight)
-        grid_layout.addWidget(self.static_inputs["destination"], 6, 1, 1, 3)
+        grid_layout.addWidget(QLabel("目的地:"), 5, 2, Qt.AlignRight)
+        grid_layout.addWidget(self.static_inputs["destination"], 5, 3)
 
         group_box.setLayout(grid_layout)
         return group_box
@@ -791,13 +770,10 @@ class MainWindow(QWidget):
         self.static_terminate_btn.setEnabled(False)
         clear_btn = QPushButton("清除")
         clear_btn.clicked.connect(self.clear_inputs_static)
-        assemble_btn = QPushButton("组装并预览")
-        assemble_btn.clicked.connect(self.assemble_and_preview_static)
         button_layout.addWidget(self.static_start_pause_btn)
         button_layout.addWidget(self.static_terminate_btn)
         button_layout.addWidget(clear_btn)
         v_layout.addLayout(button_layout)
-        v_layout.addWidget(assemble_btn)
         group_box.setLayout(v_layout)
         return group_box
 
@@ -1305,24 +1281,36 @@ class MainWindow(QWidget):
                     self.log_message(f"警告: 字段 '{field_name}' 的值 '{text}' 无效。使用默认值。", "static")
                     return default_value
 
+           #bow+stern = 船长；port+starboard=船宽
+            bow = random.randint(0, get_static_val("len", int, 0))
+            stern =get_static_val("len", int, 0) -bow
+            port = random.randint(0, get_static_val("shipWidth", int, 0))
+            starboard =get_static_val("shipWidth", int, 0) -port
+
+
             # --- 发送 AIS 静态信息 JSON ---
             mmsi_val = get_static_val("mmsi")
             if mmsi_val:
                 ais_info = {
                     "MMSI": mmsi_val,
                     "Vessel Name": get_static_val("vesselName"),
-                    "Call_Sign": get_static_val("callSign"),
+                    "Ship Class": get_static_val("deviceCategory"),
+                    "Nationality": get_static_val("nationality"),
                     "IMO": get_static_val("imo"),
-                    "LengthRealTime": get_static_val("len", int, 0),
+                    "Call_Sign": get_static_val("callSign"),
+                    # "LengthRealTime": str(get_static_val("len", float, 0.0)),
+                    "Length": str(get_static_val("len", float, 0.0)),
+                    "Wide": str(get_static_val("shipWidth",float, 0.0)),
+                    "Draught": get_static_val("draught"),
                     "Ship Type": self.static_inputs["shiptype"].currentText(),
-                    "LengthRealTime": get_static_val("len", int, 0),
-                    "Wide": get_static_val("shipWidth", int, 0),
-                    "draught": get_static_val("draught", float, 0.0),
                     "Destination": get_static_val("destination"),
                     "etaTime": get_static_val("eta"),
-                    "Nationality": get_static_val("nationality"),
-                    "Ship Class": "A",  # Default value
+                    "A (to Bow)": str(bow),
+                    "B (to Stern)": str(stern),
+                    "C (to Port)": str(port),
+                    "C (to Starboard)": str(starboard),
                     "extInfo": None
+
                 }
                 json_payload = {"AisExts": [ais_info]}
                 json_data = json.dumps(json_payload, ensure_ascii=False, indent=2)
@@ -1422,104 +1410,7 @@ class MainWindow(QWidget):
 
 
 
-    # 方便预览组装的数据，后面可以删除
-    @pyqtSlot()
-    def assemble_and_preview(self):
-        self._assemble_and_preview_generic(self.inputs, self.data_status_checkbox, self.log_message)
-
-    @pyqtSlot()
-    def assemble_and_preview_static(self):
-        logger = lambda msg: self.log_message(msg, 'static')
-        self._assemble_and_preview_generic(self.static_inputs, None, logger)
-
-    def _assemble_and_preview_generic(self, inputs_dict, data_status_checkbox, logger):
-        """
-        从UI收集数据，使用data_assembler进行组装，
-        然后压缩
-编码并显示结果，模拟发送。
-        """
-        try:
-            # Helper to get value from the correct inputs dict
-            def get_val(field_name, value_type=str, default_value=None):
-                # This helper is local and uses the passed-in inputs_dict
-                if default_value is None: default_value = value_type()
-                widget = inputs_dict.get(field_name)
-                if not widget: return default_value
-                text = ""
-                if isinstance(widget, QLineEdit):
-                    text = widget.text()
-                elif isinstance(widget, QComboBox):
-                    if data_status_checkbox and field_name == "dataStatus" and (data_status_checkbox.isChecked() or widget.currentIndex() == -1):
-                        return default_value
-                    text = widget.currentText()
-                elif isinstance(widget, QDateTimeEdit):
-                    text = widget.dateTime().toString("yyyy-MM-dd HH:mm:ss")
-
-                if not text: return default_value
-                try:
-                    return value_type(text)
-                except (ValueError, KeyError):
-                    return default_value
-
-            # 1. 从UI收集数据到一个字典
-            ui_data = {
-                "id": get_val("id"), "lastTm": int(time.time() * 1000),
-                "maxLen": get_val("maxLength", int, 0), "status": inputs_dict["dataStatus"].currentText().upper(),
-                "displayId": int(get_val("id") or 0) % 100000, "mmsi": int(get_val("mmsi") or 0),
-                "idR": 0, "state": inputs_dict['sost'].currentData(),
-                "adapterId": inputs_dict['province'].currentData(), "quality": 100,
-                "course": get_val("course", float, 0.0), "speed": get_val("speed", float, 0.0),
-                "heading": get_val("heading", float, 0.0), "len": get_val("len", int, 0),
-                "wid": get_val("shipWidth", int, 0), "shipType": inputs_dict['shiptype'].currentData(),
-                "flags": 0, "mMmsi": int(get_val("mmsi") or 0), "vesselName": get_val("vesselName"),
-                "latitude": get_val("latitude", float, 0.0), "longitude": get_val("longitude", float, 0.0),
-                "aisBaseInfo": { "Call_Sign": get_val("callSign"), "IMO": get_val("imo"), "Destination": get_val("destination") },
-                "sources": [], "fusionTargets": []
-            }
-            
-            # 处理信息源
-            radar_source_text = inputs_dict["radarSource"].text().strip()
-            if radar_source_text:
-                radar_ids = [id.strip() for id in radar_source_text.split(',') if id.strip()]
-                if radar_ids:
-                    ui_data["sources"].append({"provider": "HLX", "type": "RADAR", "ids": radar_ids})
-                    for radar_id in radar_ids:
-                        ui_data["fusionTargets"].append({
-                            "provider": "HLX", "stationId": int(radar_id), "stationType": "RADAR",
-                            "targetId": int(ui_data["id"]) if ui_data["id"] else 0,
-                            "updateTime": ui_data["lastTm"]
-                        })
-
-            ais_source_text = inputs_dict["aisSource"].text().strip()
-            if ais_source_text:
-                ais_ids = [id.strip() for id in ais_source_text.split(',') if id.strip()]
-                if ais_ids:
-                    ui_data["sources"].append({"provider": "HLX", "type": "AIS", "ids": ais_ids})
-                    for ais_id in ais_ids:
-                        ui_data["fusionTargets"].append({
-                            "provider": "HLX", "stationId": int(ais_id), "stationType": "AIS",
-                            "targetId": int(ui_data["id"]) if ui_data["id"] else 0,
-                            "updateTime": ui_data["lastTm"]
-                        })
-
-            logger("从UI收集的数据:\n" + json.dumps(ui_data, indent=2, ensure_ascii=False))
-
-            proto_message = assemble_proto_from_data(ui_data)
-            logger("组装后的Protobuf消息:\n" + str(proto_message).strip())
-
-            serialized_data = proto_message.SerializeToString()
-            compressed_data = zlib.compress(serialized_data)
-            hex_output = binascii.hexlify(compressed_data).decode('ascii')
-            formatted_hex = ' '.join(hex_output[i:i+2] for i in range(0, len(hex_output), 2))
-            
-            logger("------ 组装、压缩、编码后的结果 (Hex) ------")
-            chunk_size = 32 * 3 - 1
-            for i in range(0, len(formatted_hex), chunk_size):
-                 logger(formatted_hex[i:i+chunk_size])
-            logger("-------------------------------------------------")
-
-        except Exception as e:
-            logger(f"组装过程中发生严重错误: {e}")
+    
 
     # ===================================================================
     # 回放及其他

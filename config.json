@@ -2,7 +2,7 @@
   "kafka": {
     "bootstrap_servers": "10.100.0.211:9092",
     "topic": "unionTargetPb",
-    "ais_static_topic": "aisStaticInfoJsTest",
+    "ais_static_topic": "aisStaticInfoJs",
     "bds_topic": "bds_ShanDong_changdao"
   },
   "mysql": {
@@ -44,8 +44,6 @@
        "OTHERS": 1
     },
 
-
-
     "shiptype": {
       "渔船": 30,
       "货船": 70,
@@ -56,8 +54,10 @@
       "作业船":33,
       "其他": 200
     },
-
-
+    "deviceCategory": {
+      "A": 1,
+      "B": 2
+    },
     "sost": {
       "正常": 1,
       "预测": 2

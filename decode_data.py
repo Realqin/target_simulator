@@ -4,6 +4,8 @@ import target_pb2
 from google.protobuf.json_format import MessageToJson
 import binascii
 
+# 解码pb里发送的数据
+
 def decode_and_print_data(hex_string):
     """
     Decodes a protobuf-serialized hex string and prints it as JSON.
