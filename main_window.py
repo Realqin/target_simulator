@@ -610,12 +610,13 @@ class MainWindow(QWidget):
 
         # 关联选项
         self.association_options = {
-            "none": QRadioButton("无关联"),
+            "none": QRadioButton("停止移动"),
             "constant": QRadioButton("匀速"),
             "decelerate": QRadioButton("均减速"),
             "accelerate": QRadioButton("均加速")
         }
-        self.association_options["none"].setChecked(True)
+        # 默认选中均速
+        self.association_options["constant"].setChecked(True)
         self.association_options["none"].toggled.connect(self.handle_association_option_change)
 
         main_layout.addWidget(self.association_options["none"])
@@ -1439,8 +1440,7 @@ class MainWindow(QWidget):
                     "IMO": get_static_val("imo"),
                     "Call_Sign": get_static_val("callSign"),
                     "LengthRealTime": str(get_static_val("len", float, 0.0)),
-
-                    # "Length": str(get_static_val("len", float, 0.0)),
+                    "Length": str(get_static_val("len", float, 0.0)),
                     "Wide": str(get_static_val("shipWidth",float, 0.0)),
                     "Draught": get_static_val("draught"),
                     "Ship Type": self.static_inputs["shiptype"].currentText(),
