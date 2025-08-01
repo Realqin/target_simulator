@@ -11,7 +11,7 @@ from PyQt5.QtWidgets import (
     QPushButton, QGridLayout, QGroupBox, QTextEdit, QSpacerItem, QSizePolicy,
     QComboBox, QCheckBox, QTabWidget, QTableWidget, QTableWidgetItem,
     QHeaderView, QGraphicsView, QGraphicsScene, QDateTimeEdit, QGraphicsEllipseItem, QApplication,
-    QRadioButton, QMessageBox
+    QRadioButton, QMessageBox, QButtonGroup
 )
 from PyQt5.QtCore import pyqtSlot, QTimer, Qt, QDateTime
 from PyQt5.QtGui import QIcon, QCursor, QPen, QBrush, QColor, QPainter, QPainterPath
@@ -87,6 +87,9 @@ class MainWindow(QWidget):
         self.association_timer = QTimer(self)
         self.association_timer.timeout.connect(self.update_association_timer)
         self.association_seconds = 0
+        # 新增：目标关联状态
+        self.association_state = "stopped"  # "sending", "paused", "terminated_associated", "stopped"
+        self.keep_trend_combo = None # UI控件将在init_ui中创建
 
         # 模拟计算计时器
         self.simulation_timer = QTimer(self)
@@ -478,25 +481,6 @@ class MainWindow(QWidget):
         grid_layout.addWidget(QLabel("AIS船名:"), 1, 2, Qt.AlignRight)
         grid_layout.addWidget(self.inputs["vesselName"], 1, 3)
 
-        # ID with random button
-        # id_layout = QHBoxLayout()
-        # id_layout.addWidget(self.inputs["id"])
-        # random_id_btn = QPushButton("随机")
-        # random_id_btn.clicked.connect(lambda: self._generate_random_value("id", "ID", self.inputs, self.log_message))
-        # id_layout.addWidget(random_id_btn)
-        # grid_layout.addWidget(QLabel("ID:"), 1, 0, Qt.AlignRight)
-        # grid_layout.addLayout(id_layout, 1, 1)
-
-        # MMSI with random button
-        # mmsi_layout = QHBoxLayout()
-        # mmsi_layout.addWidget(self.inputs["mmsi"])
-        # random_mmsi_btn = QPushButton("随机")
-        # random_mmsi_btn.clicked.connect(lambda: self._generate_random_value("mmsi", "MMSI", self.inputs, self.log_message))
-        # mmsi_layout.addWidget(random_mmsi_btn)
-        # grid_layout.addWidget(QLabel("MMSI:"), 1, 2, Qt.AlignRight)
-        # grid_layout.addLayout(mmsi_layout, 1, 3)
-
-        # BDS with random button
         bds_layout = QHBoxLayout()
         bds_layout.addWidget(self.inputs["bds"])
         random_bds_btn = QPushButton("随机")
@@ -563,13 +547,9 @@ class MainWindow(QWidget):
         grid_layout.addWidget(QLabel("数据状态:"), 7, 2, Qt.AlignRight)
         grid_layout.addLayout(data_status_layout, 7, 3)
 
-
-
-        # 为必填字段的输入变化连接信号，以便实时清除错误样式
         for field_name in self.required_fields:
             widget = self.inputs.get(field_name)
             if isinstance(widget, QLineEdit):
-                # 使用 lambda 捕获正确的 widget 对象
                 widget.textChanged.connect(lambda text, w=widget: self.clear_field_style(w))
 
         self.data_status_checkbox.setChecked(True)
@@ -583,7 +563,6 @@ class MainWindow(QWidget):
         grid_layout = QGridLayout()
         grid_layout.setSpacing(3)
 
-        # 初始化该模块的控件
         self.inputs.update({
             "radarSource": QLineEdit(), "aisSource": QLineEdit(),
             "bdSource": QLineEdit()
@@ -602,54 +581,60 @@ class MainWindow(QWidget):
         """创建目标关联模块"""
         group_box = QGroupBox("目标关联")
         main_layout = QHBoxLayout()
-        main_layout.setSpacing(30)  # Add spacing between widgets
+        main_layout.setSpacing(15)
 
-        # 时长显示
-        self.association_time_label = QLabel("时长：0 秒")
-        main_layout.addWidget(self.association_time_label)
+        main_layout.addWidget(QLabel("保持运动趋势:"))
+        self.keep_trend_combo = QComboBox()
+        self.keep_trend_combo.addItems(["否", "是"])
+        self.keep_trend_combo.setCurrentIndex(0)
+        main_layout.addWidget(self.keep_trend_combo)
 
-        # 关联选项
+        main_layout.addSpacing(20)
+
+        # 使用 QButtonGroup 来确保单选按钮的互斥性
+        self.motion_button_group = QButtonGroup(self)
+
         self.association_options = {
-            "none": QRadioButton("停止移动"),
             "constant": QRadioButton("匀速"),
             "decelerate": QRadioButton("均减速"),
             "accelerate": QRadioButton("均加速")
         }
-        # 默认选中均速
+        
+        self.motion_button_group.addButton(self.association_options["constant"])
+        self.motion_button_group.addButton(self.association_options["decelerate"])
+        self.motion_button_group.addButton(self.association_options["accelerate"])
+        
         self.association_options["constant"].setChecked(True)
-        self.association_options["none"].toggled.connect(self.handle_association_option_change)
 
-        main_layout.addWidget(self.association_options["none"])
         main_layout.addWidget(self.association_options["constant"])
-        main_layout.addWidget(self.association_options["decelerate"])
 
-        # 减速布局
         decelerate_widget = QWidget()
         decelerate_layout = QHBoxLayout(decelerate_widget)
         decelerate_layout.setContentsMargins(0, 0, 0, 0)
-        decelerate_layout.setSpacing(10)
+        decelerate_layout.setSpacing(5)
         decelerate_layout.addWidget(self.association_options["decelerate"])
         self.decelerate_input = QLineEdit("0.1")
-        self.decelerate_input.setFixedWidth(60)
+        self.decelerate_input.setFixedWidth(50)
         decelerate_layout.addWidget(self.decelerate_input)
-        decelerate_layout.addWidget(QLabel("节/分钟"))
+        decelerate_layout.addWidget(QLabel("节/分"))
         main_layout.addWidget(decelerate_widget)
 
-        main_layout.addWidget(self.association_options["accelerate"])
-
-        # 加速布局
         accelerate_widget = QWidget()
         accelerate_layout = QHBoxLayout(accelerate_widget)
         accelerate_layout.setContentsMargins(0, 0, 0, 0)
         accelerate_layout.setSpacing(5)
         accelerate_layout.addWidget(self.association_options["accelerate"])
         self.accelerate_input = QLineEdit("0.1")
-        self.accelerate_input.setFixedWidth(60)
+        self.accelerate_input.setFixedWidth(50)
         accelerate_layout.addWidget(self.accelerate_input)
-        accelerate_layout.addWidget(QLabel("节/分钟"))
+        accelerate_layout.addWidget(QLabel("节/分"))
         main_layout.addWidget(accelerate_widget)
 
         main_layout.addStretch()
+
+        self.association_time_label = QLabel("时长: <font color='#3498db'>0</font> 秒")
+        main_layout.addWidget(self.association_time_label)
+
         group_box.setLayout(main_layout)
         return group_box
 
@@ -658,16 +643,14 @@ class MainWindow(QWidget):
         group_box = QGroupBox("控制与操作")
         v_layout = QVBoxLayout()
 
-        # 发送频率设置
         freq_layout = QHBoxLayout()
         freq_layout.addWidget(QLabel("发送频率（秒/次）"))
-        self.frequency_input = QLineEdit("3") # 默认3秒
+        self.frequency_input = QLineEdit("3")
         self.frequency_input.setFixedWidth(50)
         freq_layout.addWidget(self.frequency_input)
         freq_layout.addStretch()
         v_layout.addLayout(freq_layout)
 
-        # 方向控制
         control_layout = QGridLayout()
         control_layout.setSpacing(5)
         up_btn, down_btn, left_btn, right_btn = QPushButton("↑"), QPushButton("↓"), QPushButton("←"), QPushButton("→")
@@ -682,7 +665,6 @@ class MainWindow(QWidget):
         down_left_btn.clicked.connect(lambda: self.update_course_from_button(225, self.inputs))
         down_right_btn.clicked.connect(lambda: self.update_course_from_button(135, self.inputs))
 
-        # ... (styling and layout remains the same)
         cardinal_style = "background-color: #E0E0E0; font-weight: bold;"
         diagonal_style = "background-color: #D0E8FF; font-weight: bold;"
         up_btn.setStyleSheet(cardinal_style)
@@ -703,7 +685,6 @@ class MainWindow(QWidget):
         control_layout.addWidget(down_right_btn, 2, 2)
         v_layout.addLayout(control_layout)
 
-        # 操作按钮
         button_layout = QHBoxLayout()
         self.start_pause_btn = QPushButton("开始发送")
         self.start_pause_btn.clicked.connect(self.toggle_sending_state)
@@ -712,7 +693,6 @@ class MainWindow(QWidget):
         self.terminate_btn.setEnabled(False)
         clear_btn = QPushButton("清除")
         clear_btn.clicked.connect(self.clear_inputs)
-
 
         button_layout.addWidget(self.start_pause_btn)
         button_layout.addWidget(self.terminate_btn)
@@ -739,26 +719,22 @@ class MainWindow(QWidget):
             "len": QLineEdit(),"shipWidth": QLineEdit(),
             "draught": QLineEdit(),
             "shiptype": QComboBox(), "destination": QLineEdit(),
-            "eta": QDateTimeEdit(QDateTime.currentDateTime()),  # Using QDateTimeEdit for better UX
+            "eta": QDateTimeEdit(QDateTime.currentDateTime()),
         }
 
         for text, value in self.config['ui_options']['shiptype'].items():
             self.static_inputs['shiptype'].addItem(text, value)
 
-        # Configure ETA input
         self.static_inputs["eta"].setDisplayFormat("yyyy-MM-dd HH:mm:ss")
         self.static_inputs["eta"].setCalendarPopup(True)
 
-        # 从配置文件加载设备分类选项
         if 'deviceCategory' in self.config['ui_options']:
             for text, value in self.config['ui_options']['deviceCategory'].items():
                 self.static_inputs['deviceCategory'].addItem(text, value)
 
 
-        # --- 添加控件到网格布局 ---
         logger = lambda msg: self.log_message(msg, 'static')
 
-        # Row 0: MMSI and Vessel Name (Essential for static info)
         mmsi_layout = QHBoxLayout()
         mmsi_layout.addWidget(self.static_inputs["mmsi"])
         random_mmsi_btn = QPushButton("随机")
@@ -770,19 +746,16 @@ class MainWindow(QWidget):
         grid_layout.addWidget(QLabel("船名:"), 0, 2, Qt.AlignRight)
         grid_layout.addWidget(self.static_inputs["vesselName"], 0, 3)
 
-        # Row 1: Device Category and Nationality
         grid_layout.addWidget(QLabel("设备分类:"), 1, 0, Qt.AlignRight)
         grid_layout.addWidget(self.static_inputs["deviceCategory"], 1, 1)
         grid_layout.addWidget(QLabel("船籍:"), 1, 2, Qt.AlignRight)
         grid_layout.addWidget(self.static_inputs["nationality"], 1, 3)
 
-        # Row 2: IMO and Call Sign
         grid_layout.addWidget(QLabel("IMO:"), 2, 0, Qt.AlignRight)
         grid_layout.addWidget(self.static_inputs["imo"], 2, 1)
         grid_layout.addWidget(QLabel("呼号:"), 2, 2, Qt.AlignRight)
         grid_layout.addWidget(self.static_inputs["callSign"], 2, 3)
 
-        # Row 3: Ship Length, Width
         len_layout = QHBoxLayout()
         len_layout.addWidget(self.static_inputs["len"])
         len_layout.addWidget(QLabel("米"))
@@ -795,7 +768,6 @@ class MainWindow(QWidget):
         grid_layout.addWidget(QLabel("船宽:"), 3, 2, Qt.AlignRight)
         grid_layout.addLayout(width_layout, 3, 3)
 
-        # Row 4: Draught and Heading
         draught_layout = QHBoxLayout()
         draught_layout.addWidget(self.static_inputs["draught"])
         draught_layout.addWidget(QLabel("米"))
@@ -806,12 +778,10 @@ class MainWindow(QWidget):
         grid_layout.addWidget(QLabel("船舶类型:"), 4, 2, Qt.AlignRight)
         grid_layout.addWidget(self.static_inputs["shiptype"], 4, 3)
 
-        # Row 5: ETA and Ship Type
         grid_layout.addWidget(QLabel("预到时间:"), 5, 0, Qt.AlignRight)
         grid_layout.addWidget(self.static_inputs["eta"], 5, 1)
 
 
-        # Row 6: Destination
         grid_layout.addWidget(QLabel("目的地:"), 5, 2, Qt.AlignRight)
         grid_layout.addWidget(self.static_inputs["destination"], 5, 3)
 
@@ -851,10 +821,6 @@ class MainWindow(QWidget):
     def _generate_random_value(self, field_key, field_name_for_log, inputs_dict, logger):
         """
         根据配置文件中的规则生成一个随机值。
-        :param field_key: 在 self.inputs 和 config 中使用的键（如 'id', 'mmsi'）
-        :param field_name_for_log: 在日志中显示的名称（如 'ID', 'MMSI'）
-        :param inputs_dict: 要操作的输入控件字典 (self.inputs 或 self.static_inputs)
-        :param logger: The logging function to use.
         """
         try:
             config = self.config['random_generation'][field_key]
@@ -886,223 +852,235 @@ class MainWindow(QWidget):
 
     @pyqtSlot()
     def clear_inputs(self):
+        """清除所有输入和状态，恢复到默认。"""
+        self.sending_timer.stop()
+        self.association_timer.stop()
+        self.simulation_timer.stop()
+
         self._clear_inputs_generic(self.paste_input, self.inputs, self.data_status_checkbox)
-        # 清除所有必填字段的错误样式
         for field_name in self.required_fields:
             widget = self.inputs.get(field_name)
             if widget:
                 widget.setStyleSheet(self.default_lineedit_style)
-        self.log_message("所有输入已清除。")
+        
+        if self.keep_trend_combo:
+            self.keep_trend_combo.setCurrentIndex(0)
+        self.association_options["constant"].setChecked(True)
+        self.association_seconds = 0
+        self.update_association_timer_display()
+
+        self.association_state = "stopped"
+        self.location_calculator = None
+        self.is_first_send = True
+        self.start_pause_btn.setText("开始发送")
+        self.terminate_btn.setEnabled(False)
+        self.set_motion_fields_enabled(True)
+
+        self.log_message("所有输入和状态已清除。")
 
     def validate_required_fields(self):
-        """
-        校验所有必填字段是否已填写。
-        如果
-填写，则应用红色边框样式；否则清除样式。
-        :return: True 如果所有必填字段都已填写, False otherwise.
-        """
+        """校验所有必填字段是否已填写。"""
         is_valid = True
         for field_name in self.required_fields:
             widget = self.inputs.get(field_name)
             if widget and isinstance(widget, QLineEdit):
                 if not widget.text().strip():
-                    # 合并默认样式和错误样式
                     widget.setStyleSheet(self.default_lineedit_style + self.invalid_style)
                     is_valid = False
                 else:
-                    widget.setStyleSheet(self.default_lineedit_style) # 如果已填写，恢复默认样式
+                    widget.setStyleSheet(self.default_lineedit_style)
         
         if not is_valid:
             self.log_message("错误: 有必填项未填写，请检查红色高亮框。")
-            
         return is_valid
 
     def clear_field_style(self, widget):
         """清除特定输入框的样式，恢复其默认样式。"""
         widget.setStyleSheet(self.default_lineedit_style)
 
+    def set_motion_fields_enabled(self, enabled):
+        """启用或禁用与运动相关的输入字段"""
+        for field in ["longitude", "latitude", "course", "speed"]:
+            self.inputs[field].setEnabled(enabled)
+
+    def _initialize_location_calculator(self):
+        """从UI读取参数并初始化位置计算器"""
+        try:
+            start_lat = float(self.inputs['latitude'].text())
+            start_lon = float(self.inputs['longitude'].text())
+            speed = float(self.inputs['speed'].text())
+            course = float(self.inputs['course'].text())
+            self.location_calculator = LocationCalculator(start_lat, start_lon, speed, course)
+            self.log_message("位置计算器已初始化。")
+            return True
+        except (ValueError, TypeError):
+            self.log_message("错误: 无法初始化位置计算器。请确保经纬度、速度和航向为有效的数字。")
+            return False
+
     def toggle_sending_state(self):
-
-        # 1. 校验必填项
+        """主状态机，处理“开始/暂停/继续”按钮的点击事件"""
         if not self.validate_required_fields():
-            return # 如果校验失败，则不执行任何操作
+            return
 
-        # 2. 如果是雷达目标，清空相关字段并更新UI
-        selected_class = self.inputs['eTargetType'].currentText()
-        if "RADAR" == selected_class:
-            self.inputs['vesselName'].setText("")
-            self.inputs['shipName'].setText("")
-            self.inputs['mmsi'].setText("")
-            self.inputs['bds'].setText("")
-            # self.log_message("检测到雷达目标，已清空船名、MMSI和北斗号。")
+        if self.keep_trend_combo.currentText() == "是":
+            self.handle_trend_sending()
+        else:
+            self.handle_simple_sending()
 
-        if "BDS" == selected_class:
-            self.inputs['vesselName'].setText("")
-            self.inputs['bds'].setText("")
-            self.inputs['id'].setText("")
-
-        if "BDS" not in selected_class :
-            self.inputs['bds'].setText("")
-            self.inputs['shipName'].setText("")
-
-        if "AIS" not in selected_class :
-            self.inputs['mmsi'].setText("")
-            self.inputs['vesselName'].setText("")
-
-
-
-        # 3. 如果当前是“终止”或“暂停”状态，则准备开始或继续
-        if not self.sending_timer.isActive():
+    def handle_simple_sending(self):
+        """处理不保持运动趋势的发送逻辑（但仍然实时回填）"""
+        if self.association_state != "sending":
+            if not self._initialize_location_calculator():
+                return
             try:
-                # 检查定时器间隔
                 interval_ms = int(float(self.frequency_input.text()) * 1000)
-                if interval_ms <= 0:
-                    raise ValueError("Interval must be positive")
+                if interval_ms <= 0: raise ValueError
             except (ValueError, TypeError):
                 self.log_message("错误: 发送频率必须是一个大于0的数字。")
                 return
-
-            # 无论是开始还是继续，都先发送一次静态信息
-            self.send_one_time_static_info()
-
-            # 如果是全新开始（而非从暂停中恢复）
-            if self.location_calculator is None:
-                # 如果是默认模式，重置首次发送标志
-                if self.data_status_checkbox.isChecked():
-                    self.is_first_send = True
-                try:
-                    # 从UI读取初始参数
-                    start_lat = float(self.inputs['latitude'].text())
-                    start_lon = float(self.inputs['longitude'].text())
-                    speed = float(self.inputs['speed'].text())
-                    course = float(self.inputs['course'].text())
-                    
-                    # 创建计算器实例
-                    self.location_calculator = LocationCalculator(start_lat, start_lon, speed, course)
-                    self.log_message("位置计算器已初始化。开始新的轨迹计算。")
-                    # 立即发送第一个实时目标点
-                    self.send_realtime_target_data()
-
-                except (ValueError, TypeError):
-                    self.log_message("错误: 无法初始化位置计算器。请确保经纬度、速度和航向为有效的数字。")
-                    return # 参数无效，不启动
-
-            # 启动定时器
+            
+            self.send_realtime_target_data()
+            self.simulation_timer.start(1000) # 实时回填
             self.sending_timer.start(interval_ms)
-            self.log_message(f"发送已{'开始' if self.start_pause_btn.text() == '开始发送' else '继续'}，频率: {interval_ms/1000}s/次。")
+            self.log_message(f"发送已开始，频率: {interval_ms/1000}s/次 (实时回填中)。")
             self.start_pause_btn.setText("暂停发送")
             self.terminate_btn.setEnabled(True)
-            
-            # 停止并重置关联计时器
-            self.association_timer.stop()
-            self.association_seconds = 0
-            self.association_time_label.setText("时长：0 秒")
-
-        # 如果当前是“运行”状态，则暂停
+            self.association_state = "sending"
         else:
             self.sending_timer.stop()
-            self.log_message("发送已暂停。")
+            self.simulation_timer.stop() # 暂停时停止回填
+            self.log_message("发送已暂停，数据已停止回填。")
             self.start_pause_btn.setText("继续发送")
-            if not self.association_options["none"].isChecked():
-                self.association_timer.start(1000) # Start association timer
+            self.association_state = "paused"
+
+    def handle_trend_sending(self):
+        """处理保持运动趋势的复杂状态逻辑"""
+        state = self.association_state
+
+        if state == "stopped":
+            if not self._initialize_location_calculator():
+                return
+            self.send_realtime_target_data()
+            self.simulation_timer.start(1000)
+            self.sending_timer.start(int(float(self.frequency_input.text()) * 1000))
+            self.association_state = "sending"
+            self.start_pause_btn.setText("暂停发送")
+            self.terminate_btn.setEnabled(True)
+            self.log_message("已开始发送，并实时计算位移。")
+
+        elif state == "sending":
+            self.sending_timer.stop()
+            self.simulation_timer.stop()
+            self.association_timer.start(1000)
+            self.association_state = "paused"
+            self.start_pause_btn.setText("继续发送")
+            self.log_message("发送已暂停，只计时，不回填数据。")
+
+        elif state == "paused":
+            self.association_timer.stop()
+            self.log_message(f"暂停了 {self.association_seconds} 秒。")
+            if self.location_calculator:
+                new_lat, new_lon = self.location_calculator.calculate_next_point(self.association_seconds)
+                self.inputs['latitude'].setText(f"{new_lat:.8f}")
+                self.inputs['longitude'].setText(f"{new_lon:.8f}")
+                self.log_message(f"根据暂停时长，位置已更新至: {new_lat:.6f}, {new_lon:.6f}")
+            
+            self.send_realtime_target_data()
+            self.simulation_timer.start(1000)
+            self.sending_timer.start(int(float(self.frequency_input.text()) * 1000))
+            self.association_seconds = 0
+            self.update_association_timer_display()
+            self.association_state = "sending"
+            self.start_pause_btn.setText("暂停发送")
+            self.log_message("已继续发送。")
+
+        elif state == "terminated_associated":
+            self.association_timer.stop()
+            self.log_message(f"终止后等待了 {self.association_seconds} 秒。")
+            if self.location_calculator:
+                new_lat, new_lon = self.location_calculator.calculate_next_point(self.association_seconds)
+                self.inputs['latitude'].setText(f"{new_lat:.8f}")
+                self.inputs['longitude'].setText(f"{new_lon:.8f}")
+                self.log_message(f"根据等待时长，位置已更新至: {new_lat:.6f}, {new_lon:.6f}")
+
+            self.send_realtime_target_data()
+            self.simulation_timer.start(1000)
+            self.sending_timer.start(int(float(self.frequency_input.text()) * 1000))
+            self.association_seconds = 0
+            self.update_association_timer_display()
+            self.set_motion_fields_enabled(True)
+            self.association_state = "sending"
+            self.start_pause_btn.setText("暂停发送")
+            self.log_message("已从关联状态恢复发送。")
 
     def terminate_sending(self):
-        """
-        终止发送，但保留计算器状态并继续模拟。
-        如果有关联模式，则弹出确认框。
-        """
-        # 如果有关联模式，弹出确认框
-        if not self.association_options["none"].isChecked():
-            reply = QMessageBox.question(self, '确认操作', 
-                                           "下一个目标是否需要在当前目标基础上继续��匀/匀加/匀减速？",
-                                           QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
-            
-            if reply == QMessageBox.No:
-                # 用户选择“否”，切换回无关联
-                self.association_options["none"].setChecked(True)
-                # The toggled signal will handle stopping timers.
-
-        # --- 无论如何都执行以下操作 ---
+        """处理“终止发送”按钮的点击事件"""
         self.sending_timer.stop()
+        self.simulation_timer.stop()
+        self.association_timer.stop()
         self.is_first_send = True
 
-        # 发送最后一条带有删除状态的消息
         self.log_message("发送终止消息 (delete)...")
         selected_class = self.inputs['eTargetType'].currentText()
-        self._send_protobuf_data(selected_class, override_status=3) # 3 is for delete
-
+        self._send_protobuf_data(selected_class, override_status=3)
         self.log_message("发送已终止。")
+
+        if self.keep_trend_combo.currentText() == "是":
+            reply = QMessageBox.question(self, '确认操作', 
+                                           "下一个目标是否需要关联？",
+                                           QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+            if reply == QMessageBox.Yes:
+                self.association_state = "terminated_associated"
+                self.set_motion_fields_enabled(False)
+                self.association_timer.start(1000)
+                self.start_pause_btn.setText("开始发送")
+                self.terminate_btn.setEnabled(False)
+                self.log_message("进入关联等待状态，经纬度、航向、航速已锁定，开始计时。")
+                return
+
+        self.association_state = "stopped"
+        self.location_calculator = None
+        self.association_seconds = 0
+        self.update_association_timer_display()
         self.start_pause_btn.setText("开始发送")
-        
-        # 如果用户选择了“是”，则关联计时器会在这里启动
-        if not self.association_options["none"].isChecked():
-            self.association_timer.start(1000)
+        self.terminate_btn.setEnabled(False)
+        self.set_motion_fields_enabled(True)
 
     def update_association_timer(self):
         """更新目标关联时长"""
         self.association_seconds += 1
-        self.association_time_label.setText(f"时长：{self.association_seconds} 秒")
+        self.update_association_timer_display()
 
-    def handle_association_option_change(self, is_checked):
-        """处理关联选项变化"""
-        if is_checked:
-            # "无关联" is selected, stop and reset the timer
-            self.association_timer.stop()
-            self.association_seconds = 0
-            self.association_time_label.setText("时长：0 秒")
-            self.simulation_timer.stop() # Stop simulation
-        else:
-            # Another option is selected. If sending is already paused, start the association timer.
-            if not self.sending_timer.isActive():
-                self.association_timer.start(1000)
-            
-            # Ensure calculator is initialized and start simulation
-            if self.location_calculator is None:
-                try:
-                    self.location_calculator = LocationCalculator(
-                        float(self.inputs['latitude'].text()),
-                        float(self.inputs['longitude'].text()),
-                        float(self.inputs['speed'].text()),
-                        float(self.inputs['course'].text())
-                    )
-                except (ValueError, TypeError):
-                    self.log_message("错误: 无法初始化位置计算器。请确保经纬度、速度和航向为有效的数字。")
-                    self.association_options["none"].setChecked(True) # Revert selection
-                    return
-            self.simulation_timer.start(1000)
+    def update_association_timer_display(self):
+        """更新时长标签的显示"""
+        self.association_time_label.setText(f"时长: <font color='#3498db'>0</font> 秒")
 
     def update_simulation(self):
         """根据关联模式，实时计算并更新UI上的速度和位置"""
         if not self.location_calculator:
+            self.simulation_timer.stop()
             return
 
         try:
             current_speed = float(self.inputs['speed'].text())
-            new_speed = current_speed
+            current_course = float(self.inputs['course'].text())
+            self.location_calculator.update_params(speed_knots=current_speed, course_degrees=current_course)
 
+            new_speed = current_speed
             if self.association_options["decelerate"].isChecked():
                 rate_per_min = float(self.decelerate_input.text())
                 rate_per_sec = rate_per_min / 60.0
                 new_speed -= rate_per_sec
-                new_speed = max(0, new_speed) # Clamp at 0
-            
+                new_speed = max(0, new_speed)
             elif self.association_options["accelerate"].isChecked():
                 rate_per_min = float(self.accelerate_input.text())
                 rate_per_sec = rate_per_min / 60.0
                 new_speed += rate_per_sec
-                new_speed = min(100, new_speed) # Clamp at 100
-
-            # For "constant" speed, new_speed remains unchanged from current_speed
-
-            current_course = float(self.inputs['course'].text())
             
-            # Update calculator with the new speed
             self.location_calculator.update_params(speed_knots=new_speed, course_degrees=current_course)
             
-            # Calculate next point based on a 1-second interval
             new_lat, new_lon = self.location_calculator.calculate_next_point(1.0)
             
-            # Update UI
             self.inputs['speed'].setText(f"{new_speed:.2f}")
             self.inputs['latitude'].setText(f"{new_lat:.8f}")
             self.inputs['longitude'].setText(f"{new_lon:.8f}")
@@ -1119,7 +1097,6 @@ class MainWindow(QWidget):
         if default_value is None:
             default_value = value_type()
 
-        # Note: This method now only works for the realtime tab's `self.inputs`
         widget = self.inputs.get(field_name)
         if not widget: return default_value
 
@@ -1138,7 +1115,6 @@ class MainWindow(QWidget):
             self.log_message(f"警告: 字段 '{field_name}' 的值 '{text}' 无效。使用默认值。")
             return default_value
 
-    # 发送一次静态信息（用于实时目标页签）
     def send_one_time_static_info(self):
         """只发送一次AIS静态信息（用于实时目标页签）。"""
         try:
@@ -1168,25 +1144,17 @@ class MainWindow(QWidget):
         try:
             selected_class = self.inputs['eTargetType'].currentText()
 
-            # --- 1. 根据选择的类型决定发送流程 ---
-            # 纯BDS目
             if selected_class == "BDS":
                 self._send_bds_json_data(selected_class)
-            # 纯RADAR目标
             elif selected_class == "RADAR":
                 self._send_protobuf_data(selected_class)
-            # 其他混合类型
             else:
-                # 发送Protobuf
                 self._send_protobuf_data(selected_class)
-                # 如果包含AIS，发送静态信息
                 if "AIS" in selected_class:
                     self._send_ais_static_data()
-                # 如果包含BDS，发送BDS JSON
                 if "BDS" in selected_class:
                     self._send_bds_json_data(selected_class)
             
-            # 在所有消息发送后，更新首次发送标志
             if self.is_first_send:
                 self.is_first_send = False
 
@@ -1198,7 +1166,6 @@ class MainWindow(QWidget):
         target_list = target_pb2.TargetProtoList()
         target = target_list.list.add()
 
-        # 填充Protobuf消息
         selected_state = self.inputs['sost'].currentData()
         eTargetType_val = 0
         if 'eTargetType_mapping' in self.config['ui_options']:
@@ -1208,7 +1175,6 @@ class MainWindow(QWidget):
                     break
         
         target.id = self.get_field_value("id", int, 0)
-        # 如果是非纯北斗目标，则自动生成ID
         if (target.id == 0) & (selected_class != "BDS"):
             self._generate_random_value("id", "ID", self.inputs, self.log_message)
             target.id = self.get_field_value("id", int, 0)
@@ -1228,7 +1194,6 @@ class MainWindow(QWidget):
         pos_info = target.pos
         pos_info.id = target.id
         pos_info.mmsi = self.get_field_value("mmsi", int, 0)
-        # 如果包含ais且MMSI为空，则自动生成MMSI
         if (pos_info.mmsi == 0) & ("AIS" in selected_class):
             self._generate_random_value("mmsi", "MMSI", self.inputs, self.log_message)
             pos_info.mmsi = self.get_field_value("mmsi", int, 0)
@@ -1252,8 +1217,6 @@ class MainWindow(QWidget):
         pos_info.aidtype = 1
         target.adapterId = self.inputs['province'].currentData()
 
-        # 填充 sources 和 vecFusionedTargetInfo
-        # 处理雷达信息源
         radar_source_text = self.inputs["radarSource"].text().strip()
         if radar_source_text:
             source = target.sources.add()
@@ -1263,12 +1226,11 @@ class MainWindow(QWidget):
             for radar_id in radar_ids:
                 source.ids.append(radar_id)
                 info = target.vecFusionedTargetInfo.add()
-                info.uiStationType = 82  # 'R'
+                info.uiStationType = 82
                 info.ullPosUpdateTime = target.lastTm
                 info.ullUniqueId = target.id
                 info.uiStationId = int(radar_id)
 
-        # 处理AIS信息源
         ais_source_text = self.inputs["aisSource"].text().strip()
         if ais_source_text:
             source = target.sources.add()
@@ -1278,24 +1240,10 @@ class MainWindow(QWidget):
             for ais_id in ais_ids:
                 source.ids.append(ais_id)
                 info = target.vecFusionedTargetInfo.add()
-                info.uiStationType = 65  # 'A'
+                info.uiStationType = 65
                 info.ullPosUpdateTime = target.lastTm
                 info.ullUniqueId = target.id
                 info.uiStationId = int(ais_id)
-
-        # 处理北斗信息源
-        # bd_source_text = self.inputs["bdSource"].text().strip()
-        # if bd_source_text:
-        #     source = target.sources.add()
-        #     source.provider = "HLX"
-        #     source.type = "BDS"
-        #     bd_ids = [id.strip() for id in bd_source_text.split(',') if id.strip()]
-        #     for bd_id in bd_ids:
-        #         source.ids.append(bd_id)
-        #         info = target.vecFusionedTargetInfo.add()
-        #         info.ullPosUpdateTime = target.lastTm
-        #         info.ullUniqueId = target.id
-        #         info.uiStationId = int(bd_id)
 
         self.log_message("构造的 Protobuf 消息内容:\n" + str(target).strip())
         pb_data = target_list.SerializeToString()
@@ -1337,7 +1285,6 @@ class MainWindow(QWidget):
                 province_name_en = province_item['name_en']
                 break
 
-
         terminal= self.get_field_value("bds", float, 0.0)
         if terminal ==0:
             self._generate_random_value("bds", "BDS", self.inputs, self.log_message)
@@ -1375,16 +1322,14 @@ class MainWindow(QWidget):
 
     @pyqtSlot()
     def clear_inputs_static(self):
-        self._clear_inputs_generic(self.static_paste_input, self.static_inputs, None) # No checkbox for static tab
+        self._clear_inputs_generic(self.static_paste_input, self.static_inputs, None)
         self.log_message("所有输入已清除 (静态)。", "static")
 
     def toggle_sending_state_static(self):
-        # Pass the correct logger to the generic function
         logger = lambda msg: self.log_message(msg, 'static')
         self._toggle_sending_state_generic(self.static_sending_timer, self.static_frequency_input, self.static_start_pause_btn, self.static_terminate_btn, self.send_static_data, logger)
 
     def terminate_sending_static(self):
-        # Pass the correct logger to the generic function
         logger = lambda msg: self.log_message(msg, 'static')
         self._terminate_sending_generic(self.static_sending_timer, self.static_frequency_input, self.static_start_pause_btn, self.static_terminate_btn, logger)
 
@@ -1396,7 +1341,6 @@ class MainWindow(QWidget):
         核心函数：收集静态信息UI数据，构建并发送AIS静态信息JSON。
         """
         try:
-            # Helper to get value from the static inputs dict
             def get_static_val(field_name, value_type=str, default_value=None):
                 if default_value is None:
                     default_value = value_type()
@@ -1414,22 +1358,18 @@ class MainWindow(QWidget):
                 elif isinstance(widget, QDateTimeEdit):
                     text = widget.dateTime().toString("yyyy-MM-dd HH:mm:ss")
 
-                if not text:
-                    return default_value
+                if not text: return default_value
                 try:
                     return value_type(text)
                 except (ValueError, KeyError):
                     self.log_message(f"警告: 字段 '{field_name}' 的值 '{text}' 无效。使用默认值。", "static")
                     return default_value
 
-           #bow+stern = 船长；port+starboard=船宽
             bow = random.randint(0, get_static_val("len", int, 0))
             stern =get_static_val("len", int, 0) -bow
             port = random.randint(0, get_static_val("shipWidth", int, 0))
             starboard =get_static_val("shipWidth", int, 0) -port
 
-
-            # --- 发送 AIS 静态信息 JSON ---
             mmsi_val = get_static_val("mmsi")
             if mmsi_val:
                 ais_info = {
@@ -1451,7 +1391,6 @@ class MainWindow(QWidget):
                     "C (to Port)": str(port),
                     "C (to Starboard)": str(starboard),
                     "extInfo": None
-
                 }
                 json_payload = {"AisExts": [ais_info]}
                 json_data = json.dumps(json_payload, ensure_ascii=False, indent=2)
@@ -1490,13 +1429,12 @@ class MainWindow(QWidget):
                             index = widget.findText(raw_value, Qt.MatchContains)
                             if index != -1: widget.setCurrentIndex(index)
                         elif isinstance(widget, QDateTimeEdit):
-                            # Attempt to parse date/time from recognized string
                             try:
                                 dt = QDateTime.fromString(raw_value, "yyyy-MM-dd HH:mm:ss")
                                 if dt.isValid():
                                     widget.setDateTime(dt)
                             except:
-                                pass # Ignore if parsing fails
+                                pass
                         filled_fields.append(field_name)
                         break
         logger(f"快速识别: 已填充字段 {', '.join(filled_fields)}" if filled_fields else "快速识别: 未找到可识别的数据。")
@@ -1548,10 +1486,6 @@ class MainWindow(QWidget):
         else:
             data_status_combo.setEnabled(True)
             data_status_combo.setCurrentIndex(0)
-
-
-
-    
 
     # ===================================================================
     # 回放及其他
@@ -1617,7 +1551,6 @@ class MainWindow(QWidget):
             row_dict = row._asdict()
             key = row_dict.get('mmsi') if row_dict.get('mmsi') else row_dict.get('id')
             if key:
-                # 确保key是字符串类型以便于查找
                 key_str = str(key)
                 if key_str not in self.trajectory_data:
                     self.trajectory_data[key_str] = []
@@ -1631,12 +1564,10 @@ class MainWindow(QWidget):
         row_position = self.query_builder_table.rowCount()
         self.query_builder_table.insertRow(row_position)
 
-        # 为MMSI, ID, Province添加可编辑的QTableWidgetItem
         self.query_builder_table.setItem(row_position, 0, QTableWidgetItem(""))
         self.query_builder_table.setItem(row_position, 1, QTableWidgetItem(""))
         self.query_builder_table.setItem(row_position, 2, QTableWidgetItem(""))
 
-        # 为时间列添加QDateTimeEdit控件
         start_time_edit = QDateTimeEdit(QDateTime.currentDateTime().addDays(-1))
         start_time_edit.setDisplayFormat("yyyy-MM-dd HH:mm:ss")
         self.query_builder_table.setCellWidget(row_position, 3, start_time_edit)
@@ -1699,7 +1630,6 @@ class MainWindow(QWidget):
             if points:
                 all_points_for_bounds.extend(points)
 
-        # 1. 计算所有选中轨迹的边界
         for p in all_points_for_bounds:
             try:
                 lon, lat = float(p['longitude']), float(p['latitude'])
@@ -1709,17 +1639,15 @@ class MainWindow(QWidget):
             except (ValueError, TypeError):
                 continue
 
-        if min_lon > 180: # 如果没有找到任何有效的点
+        if min_lon > 180:
             return
 
-        # 2. 设置场景边界
         lon_margin = (max_lon - min_lon) * 0.1 if max_lon > min_lon else 0.1
         lat_margin = (max_lat - min_lat) * 0.1 if max_lat > min_lat else 0.1
         scene_lon_min, scene_lon_max = min_lon - lon_margin, max_lon + lon_margin
         scene_lat_min, scene_lat_max = min_lat - lat_margin, max_lat + lat_margin
         self.trajectory_scene.setSceneRect(scene_lon_min, -scene_lat_max, scene_lon_max - scene_lon_min, scene_lat_max - scene_lat_min)
 
-        # 3. 定义颜色方案并绘制轨迹
         palette = [QColor("#1f77b4"), QColor("#ff7f0e"), QColor("#2ca02c"), QColor("#d62728"),
                    QColor("#9467bd"), QColor("#8c564b"), QColor("#e377c2"), QColor("#7f7f7f")]
         
@@ -1727,9 +1655,8 @@ class MainWindow(QWidget):
             points = self.trajectory_data.get(key)
             if not points: continue
             
-            points.sort(key=lambda p: p.get('lastTm', 0)) # 按时间排序
+            points.sort(key=lambda p: p.get('lastTm', 0))
             
-            # 对点进行抽样
             sampled_points = []
             if len(points) > 30:
                 step = len(points) / 30.0
@@ -1743,34 +1670,29 @@ class MainWindow(QWidget):
             if len(sampled_points) < 1: continue
 
             pen_color = palette[i % len(palette)]
-            path_pen = QPen(pen_color, 1, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin) # 线宽为1px
+            path_pen = QPen(pen_color, 1, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
             
             path = QPainterPath()
             
-            # 从抽样点中获取有效坐标
             valid_points = []
             for p in sampled_points:
                 try:
                     lon, lat = float(p['longitude']), float(p['latitude'])
                     if 180 >= lon >= -180 and 90 >= lat >= -90:
-                        valid_points.append((lon, -lat)) # Y轴反转
+                        valid_points.append((lon, -lat))
                 except (ValueError, TypeError, KeyError):
                     continue
             
             if not valid_points: continue
 
-            # 移动到第一个点
             path.moveTo(valid_points[0][0], valid_points[0][1])
             
-            # 绘制轨迹点和连线
             point_brush = QBrush(pen_color)
-            # 动态计算点的大小，使其在缩放时保持较小但可见
             point_size = (scene_lon_max - scene_lon_min) / 200000.0
             
             for j in range(len(valid_points)):
                 if j > 0:
                     path.lineTo(valid_points[j][0], valid_points[j][1])
-                # 绘制轨迹点
                 self.trajectory_scene.addEllipse(
                     valid_points[j][0] - point_size / 2, 
                     valid_points[j][1] - point_size / 2, 
@@ -1780,9 +1702,7 @@ class MainWindow(QWidget):
 
             self.trajectory_scene.addPath(path, path_pen)
 
-        # 4. 自适应缩放视图
         self.trajectory_preview.fitInView(self.trajectory_scene.itemsBoundingRect(), Qt.KeepAspectRatio)
-
 
     def start_playback(self):
         """开始回放选中的轨迹"""
@@ -1794,7 +1714,6 @@ class MainWindow(QWidget):
                 key = mmsi if mmsi != 'N/A' else target_id
                 
                 if key in self.trajectory_data:
-                    # Sort by timestamp before adding
                     sorted_points = sorted(self.trajectory_data[key], key=lambda p: p['lastTm'])
                     self.playback_targets.extend(sorted_points)
         
@@ -1802,11 +1721,10 @@ class MainWindow(QWidget):
             self.log_message("没有选择要回放的目标。")
             return
 
-        # Sort all points from all selected targets by time
         self.playback_targets.sort(key=lambda p: p['lastTm'])
         self.current_playback_index = 0
         self.log_message(f"准备回放 {len(self.playback_targets)} 个数据点。")
-        self.playback_timer.start(10) # Start immediately
+        self.playback_timer.start(10)
 
     def send_playback_data(self):
         """发送单个轨迹点并设置下一个定时器"""
@@ -1817,14 +1735,13 @@ class MainWindow(QWidget):
 
         point = self.playback_targets[self.current_playback_index]
         
-        # --- 构建 Protobuf 消息 ---
         target_list = target_pb2.TargetProtoList()
         target = target_list.list.add()
         
         target.id = point.get('id', 0)
         target.lastTm = point.get('lastTm', int(time.time()))
-        target.sost = 1 # 默认正常
-        target.eTargetType = 14 # 默认OTHERS
+        target.sost = 1
+        target.eTargetType = 14
         
         pos_info = target.pos
         pos_info.id = target.id
@@ -1839,40 +1756,31 @@ class MainWindow(QWidget):
         geo_ptn.longitude = point.get('longitude', 0.0)
         geo_ptn.latitude = point.get('latitude', 0.0)
 
-        # 发送
         pb_data = target_list.SerializeToString()
         topic = self.config['kafka']['topic']
         self.kafka_producer.send_message(topic, pb_data)
         self.log_message(f"发送回放数据点: MMSI={pos_info.mmsi}, Time={target.lastTm}")
 
-        # 更新UI
         self.update_playback_preview(geo_ptn.longitude, geo_ptn.latitude)
 
-        # 设置下一次发送的间隔
         self.current_playback_index += 1
         if self.current_playback_index < len(self.playback_targets):
             next_point = self.playback_targets[self.current_playback_index]
             time_diff_ms = (next_point['lastTm'] - point['lastTm']) * 1000
-            # We can add a speed multiplier here if needed, for now 1:1
-            self.playback_timer.setInterval(max(50, time_diff_ms)) # Min interval 50ms
+            self.playback_timer.setInterval(max(50, time_diff_ms))
         else:
             self.playback_timer.stop()
             self.log_message("回放完成。")
 
     def update_playback_preview(self, lon, lat):
         """在预览图上高亮当前发送的点"""
-        # Remove previous point
         for item in self.trajectory_scene.items():
             if isinstance(item, QGraphicsEllipseItem):
                 self.trajectory_scene.removeItem(item)
         
-        # Add new point
         pen = QPen(Qt.red)
         brush = QBrush(Qt.red)
-        # Note: The view needs to be transformed to handle lat/lon correctly.
-        # This is a simplified drawing.
         self.trajectory_scene.addEllipse(lon - 0.001, lat - 0.001, 0.002, 0.002, pen, brush)
-
 
     def log_message(self, message, tab='realtime'):
         """Logs a message to the appropriate log display based on the tab."""
@@ -1880,16 +1788,14 @@ class MainWindow(QWidget):
         log_entry = f"[{timestamp}] {message}"
         
         log_display_widget = None
-        # Determine the target log widget
         if tab == 'static' and hasattr(self, 'static_log_display'):
             log_display_widget = self.static_log_display
-        elif hasattr(self, 'log_display'): # Default to realtime
+        elif hasattr(self, 'log_display'):
             log_display_widget = self.log_display
 
         if log_display_widget:
             log_display_widget.append(log_entry)
         
-        # Also print to console for debugging, prefixed with the tab name
         print(f"({tab}) {log_entry}")
 
     def closeEvent(self, event):
@@ -1897,8 +1803,6 @@ class MainWindow(QWidget):
         if self.db:
             self.db.close()
         event.accept()
-
-    
 
     @pyqtSlot()
     def save_initial_target(self):
