@@ -587,6 +587,7 @@ class MainWindow(QWidget):
         self.keep_trend_combo = QComboBox()
         self.keep_trend_combo.addItems(["否", "是"])
         self.keep_trend_combo.setCurrentIndex(0)
+        self.keep_trend_combo.currentIndexChanged.connect(self.on_keep_trend_changed)
         main_layout.addWidget(self.keep_trend_combo)
 
         main_layout.addSpacing(20)
@@ -898,10 +899,12 @@ class MainWindow(QWidget):
         """清除特定输入框的样式，恢复其默认样式。"""
         widget.setStyleSheet(self.default_lineedit_style)
 
-    def set_motion_fields_enabled(self, enabled):
+    def set_motion_fields_enabled(self, enabled, lock_course=True):
         """启用或禁用与运动相关的输入字段"""
-        for field in ["longitude", "latitude", "course", "speed"]:
+        for field in ["longitude", "latitude", "speed"]:
             self.inputs[field].setEnabled(enabled)
+        if lock_course:
+            self.inputs["course"].setEnabled(enabled)
 
     def _initialize_location_calculator(self):
         """从UI读取参数并初始化位置计算器"""
@@ -979,13 +982,57 @@ class MainWindow(QWidget):
         elif state == "paused":
             self.association_timer.stop()
             self.log_message(f"暂停了 {self.association_seconds} 秒。")
-            if self.location_calculator:
-                new_lat, new_lon = self.location_calculator.calculate_next_point(self.association_seconds)
+
+            try:
+                # 1. 立即从UI读取当前所有相关值
+                start_lat = float(self.inputs['latitude'].text())
+                start_lon = float(self.inputs['longitude'].text())
+                current_speed = float(self.inputs['speed'].text())
+                current_course = float(self.inputs['course'].text())
+                duration_sec = self.association_seconds
+
+                # 2. 使用当前UI值重新创建一个新的计算器实例，以确保起点正确
+                self.location_calculator = LocationCalculator(start_lat, start_lon, current_speed, current_course)
+
+                # 3. 计算新的最终航速
+                new_speed = current_speed
+                if self.association_options["decelerate"].isChecked():
+                    rate_per_min = float(self.decelerate_input.text())
+                    rate_per_sec = rate_per_min / 60.0
+                    new_speed -= rate_per_sec * duration_sec
+                    new_speed = max(0, new_speed)
+                elif self.association_options["accelerate"].isChecked():
+                    rate_per_min = float(self.accelerate_input.text())
+                    rate_per_sec = rate_per_min / 60.0
+                    new_speed += rate_per_sec * duration_sec
+                
+                # 4. 使用平均速度计算位移
+                avg_speed = (current_speed + new_speed) / 2.0
+                self.location_calculator.update_params(speed_knots=avg_speed) 
+                new_lat, new_lon = self.location_calculator.calculate_next_point(duration_sec)
+                
+                # 5. 重要: 将计算器的速度更新为最终速度，以供后续模拟使用
+                self.location_calculator.update_params(speed_knots=new_speed)
+
+                # 6. 将计算出的最终航速和新位置回填到UI
+                self.inputs['speed'].setText(f"{new_speed:.2f}")
                 self.inputs['latitude'].setText(f"{new_lat:.8f}")
                 self.inputs['longitude'].setText(f"{new_lon:.8f}")
-                self.log_message(f"根据暂停时长，位置已更新至: {new_lat:.6f}, {new_lon:.6f}")
-            
+                self.log_message(f"航速更新至 {new_speed:.2f} 节。位置更新至: {new_lat:.6f}, {new_lon:.6f}")
+
+            except (ValueError, TypeError) as e:
+                self.log_message(f"错误: 恢复发送时更新状态失败 - {e}")
+                # 即使计算失败，也要尝试恢复计时器以避免卡住
+                self.association_state = "sending"
+                self.start_pause_btn.setText("暂停发送")
+                self.simulation_timer.start(1000)
+                self.sending_timer.start(int(float(self.frequency_input.text()) * 1000))
+                return
+
+            # 7. 使用回填后的新数据发送消息
             self.send_realtime_target_data()
+            
+            # 8. 恢复正常模拟和发送
             self.simulation_timer.start(1000)
             self.sending_timer.start(int(float(self.frequency_input.text()) * 1000))
             self.association_seconds = 0
@@ -997,20 +1044,55 @@ class MainWindow(QWidget):
         elif state == "terminated_associated":
             self.association_timer.stop()
             self.log_message(f"终止后等待了 {self.association_seconds} 秒。")
-            if self.location_calculator:
-                new_lat, new_lon = self.location_calculator.calculate_next_point(self.association_seconds)
+            
+            try:
+                # 1. 从UI读取当前值，包括可能已修改的航向
+                start_lat = float(self.inputs['latitude'].text())
+                start_lon = float(self.inputs['longitude'].text())
+                current_speed = float(self.inputs['speed'].text())
+                current_course = float(self.inputs['course'].text()) # 读取最新的航向
+                duration_sec = self.association_seconds
+
+                # 2. 使用这些值重新创建计算器
+                self.location_calculator = LocationCalculator(start_lat, start_lon, current_speed, current_course)
+
+                # 3. 计算新航速
+                new_speed = current_speed
+                if self.association_options["decelerate"].isChecked():
+                    rate_per_min = float(self.decelerate_input.text())
+                    rate_per_sec = rate_per_min / 60.0
+                    new_speed -= rate_per_sec * duration_sec
+                    new_speed = max(0, new_speed)
+                elif self.association_options["accelerate"].isChecked():
+                    rate_per_min = float(self.accelerate_input.text())
+                    rate_per_sec = rate_per_min / 60.0
+                    new_speed += rate_per_sec * duration_sec
+                
+                # 4. 计算新位置
+                avg_speed = (current_speed + new_speed) / 2.0
+                self.location_calculator.update_params(speed_knots=avg_speed)
+                new_lat, new_lon = self.location_calculator.calculate_next_point(duration_sec)
+                self.location_calculator.update_params(speed_knots=new_speed)
+
+                # 5. 回填UI
+                self.inputs['speed'].setText(f"{new_speed:.2f}")
                 self.inputs['latitude'].setText(f"{new_lat:.8f}")
                 self.inputs['longitude'].setText(f"{new_lon:.8f}")
-                self.log_message(f"根据等待时长，位置已更新至: {new_lat:.6f}, {new_lon:.6f}")
+                self.log_message(f"根据等待时长和当前输入，状态已更新。")
 
+            except (ValueError, TypeError) as e:
+                self.log_message(f"错误: 从关联状态恢复时计算失败 - {e}")
+
+            # 6. 解除所有锁定，恢复正常发送
+            self.set_motion_fields_enabled(True)
             self.send_realtime_target_data()
             self.simulation_timer.start(1000)
             self.sending_timer.start(int(float(self.frequency_input.text()) * 1000))
             self.association_seconds = 0
             self.update_association_timer_display()
-            self.set_motion_fields_enabled(True)
             self.association_state = "sending"
             self.start_pause_btn.setText("暂停发送")
+            self.terminate_btn.setEnabled(True)
             self.log_message("已从关联状态恢复发送。")
 
     def terminate_sending(self):
@@ -1031,11 +1113,11 @@ class MainWindow(QWidget):
                                            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
             if reply == QMessageBox.Yes:
                 self.association_state = "terminated_associated"
-                self.set_motion_fields_enabled(False)
+                self.set_motion_fields_enabled(False, lock_course=False) # 只锁定部分字段
                 self.association_timer.start(1000)
                 self.start_pause_btn.setText("开始发送")
                 self.terminate_btn.setEnabled(False)
-                self.log_message("进入关联等待状态，经纬度、航向、航速已锁定，开始计时。")
+                self.log_message("进入关联等待状态，航速和位置已锁定，航向可修改。开始计时。")
                 return
 
         self.association_state = "stopped"
@@ -1046,6 +1128,27 @@ class MainWindow(QWidget):
         self.terminate_btn.setEnabled(False)
         self.set_motion_fields_enabled(True)
 
+    @pyqtSlot(int)
+    def on_keep_trend_changed(self, index):
+        """Handles changes in the 'Keep Motion Trend' dropdown."""
+        is_trend_keeping = self.keep_trend_combo.itemText(index) == "是"
+
+        if not is_trend_keeping:
+            # Switched to "No"
+            self.log_message("保持运动趋势已关闭。关联计时器已重置。")
+            self.association_timer.stop()
+            self.association_seconds = 0
+            self.update_association_timer_display()
+            # Also reset the state if it was in a waiting-for-association state
+            if self.association_state == "terminated_associated":
+                self.association_state = "stopped"
+                self.start_pause_btn.setText("开始发送")
+                self.terminate_btn.setEnabled(False)
+                self.set_motion_fields_enabled(True)
+        else:
+            # Switched to "Yes"
+            self.log_message("保持运动趋势已开启。")
+
     def update_association_timer(self):
         """更新目标关联时长"""
         self.association_seconds += 1
@@ -1053,7 +1156,7 @@ class MainWindow(QWidget):
 
     def update_association_timer_display(self):
         """更新时长标签的显示"""
-        self.association_time_label.setText(f"时长: <font color='#3498db'>0</font> 秒")
+        self.association_time_label.setText(f"时长: <font color='#3498db'>{self.association_seconds}</font> 秒")
 
     def update_simulation(self):
         """根据关联模式，实时计算并更新UI上的速度和位置"""
