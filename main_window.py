@@ -6,28 +6,45 @@ import re
 import random
 import json
 import math
+import os
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QGridLayout, QGroupBox, QTextEdit, QSpacerItem, QSizePolicy,
     QComboBox, QCheckBox, QTabWidget, QTableWidget, QTableWidgetItem,
     QHeaderView, QGraphicsView, QGraphicsScene, QDateTimeEdit, QGraphicsEllipseItem, QApplication,
-    QRadioButton, QMessageBox, QButtonGroup
+    QRadioButton, QMessageBox, QButtonGroup, QInputDialog, QGraphicsSimpleTextItem, QGraphicsItem,
+    QDialog
 )
-from PyQt5.QtCore import pyqtSlot, QTimer, Qt, QDateTime
-from PyQt5.QtGui import QIcon, QCursor, QPen, QBrush, QColor, QPainter, QPainterPath
+from PyQt5.QtCore import pyqtSlot, QTimer, Qt, QDateTime, pyqtSignal
+from PyQt5.QtGui import QIcon, QCursor, QPen, QBrush, QColor, QPainter, QPainterPath, QFont
+
 
 import zlib
 import binascii
+import datetime
+import decimal
 from kafka_producer import KProducer
 import target_pb2
 from database import Database
 from location_calculator import LocationCalculator
 
 
+def json_serial(obj):
+    """JSON serializer for objects not serializable by default json code"""
+    if isinstance(obj, (datetime.datetime, datetime.date)):
+        return obj.isoformat()
+    if isinstance(obj, decimal.Decimal):
+        return float(obj)
+    raise TypeError(f"Type {type(obj)} not serializable")
+
+
 class ZoomableView(QGraphicsView):
     """
     一个支持鼠标滚轮缩放和拖拽平移的QGraphicsView子类。
     """
+    # 添加一个信号，在视图缩放时发射
+    zoomed = pyqtSignal()
+
     def __init__(self, scene, parent=None):
         super().__init__(scene, parent)
         self.setRenderHint(QPainter.Antialiasing)
@@ -56,6 +73,9 @@ class ZoomableView(QGraphicsView):
         delta = new_pos - old_pos
         self.translate(delta.x(), delta.y())
 
+        # 发射缩放信号
+        self.zoomed.emit()
+
 
 class MainWindow(QWidget):
     """
@@ -67,6 +87,11 @@ class MainWindow(QWidget):
         self.setObjectName("MainWindow")
         self.setWindowTitle("Simu Kafka Sender")
         self.setGeometry(100, 100, 1300, 750) # x, y, width, height
+
+        # --- 回放模块状态 ---
+        self.playback_query_cache = {} # {row_index: {"params": {...}, "points": [...]}}
+        self.data_track_dir = "data_track"
+        os.makedirs(self.data_track_dir, exist_ok=True)
 
         # 加载外部配置
         self.config = self.load_config()
@@ -91,7 +116,7 @@ class MainWindow(QWidget):
         self.association_state = "stopped"  # "sending", "paused", "terminated_associated", "stopped"
         self.keep_trend_combo = None # UI控件将在init_ui中创建
 
-        # 模拟计算计时器
+        # 模拟计算定时器
         self.simulation_timer = QTimer(self)
         self.simulation_timer.timeout.connect(self.update_simulation)
 
@@ -116,16 +141,17 @@ class MainWindow(QWidget):
         self.default_lineedit_style = ""
         self.load_and_extract_styles()
 
-        # 初始化UI界面
+        # 初始化UI界面，确保所有UI控件都已创建
         self.init_ui()
-        
-        # 初始化Kafka生产者，并将UI的日志函数作为回调传递进去
-        # 注意: Kafka连接日志等全局信息将显示在主（实时）日志窗口
+
+        # 初始化Kafka生产者，并将UI的日志函数作为回调传进去
         self.kafka_producer = KProducer(
             bootstrap_servers=self.config['kafka']['bootstrap_servers'],
             log_callback=self.log_message
         )
-        
+        # 在UI准备好之后再连接Kafka
+        self.kafka_producer.connect()
+
         # 初始化数据库连接
         try:
             self.db = Database(self.config.get('starrocks'))
@@ -142,7 +168,7 @@ class MainWindow(QWidget):
                 stylesheet = f.read()
                 # 应用全局样式
                 QApplication.instance().setStyleSheet(stylesheet)
-                
+
                 # 简单提取QLineEdit的样式
                 # 注意：这是一个简化的解析，对于复杂的QSS可能不完全准确
                 match = re.search(r'QLineEdit\s*{(.*?)}', stylesheet, re.DOTALL)
@@ -164,11 +190,11 @@ class MainWindow(QWidget):
             print("错误: 配置文件 'config.json' 未找到。将使用默认设置。")
         except json.JSONDecodeError:
             print("错误: 配置文件 'config.json' 格式无效。将使用默认设置。")
-        
+
         # 返回一个安全的默认值
         return {
             "kafka": {
-                "bootstrap_servers": "localhost:9092", 
+                "bootstrap_servers": "localhost:9092",
                 "topic": "fusion_target_topic",
                 "ais_static_topic": "ais_static_topic"
             },
@@ -219,7 +245,7 @@ class MainWindow(QWidget):
     def setup_realtime_tab(self):
         """配置“实时目标”标签页的UI内容"""
         tab_layout = QHBoxLayout(self.realtime_tab)
-        
+
         # --- 左侧布局 (包含目标信息和AIS静态信息) ---
         left_v_layout = QVBoxLayout()
 
@@ -258,7 +284,7 @@ class MainWindow(QWidget):
         # --- 右侧布局 (包含控制操作和日志) ---
         right_v_layout = QVBoxLayout()
         right_v_layout.addWidget(self.create_control_group())
-        
+
         # 将日志区移动到右侧
         self.log_group = QGroupBox("发送日志")
         self.log_group.setCheckable(True)
@@ -272,7 +298,7 @@ class MainWindow(QWidget):
         log_layout.addWidget(self.log_display)
         self.log_group.setLayout(log_layout)
         self.log_group.toggled.connect(self.log_display.setVisible)
-        
+
         right_v_layout.addWidget(self.log_group, stretch=1)
 
         # --- 组合左右布局到实时目标Tab ---
@@ -282,7 +308,7 @@ class MainWindow(QWidget):
     def setup_static_info_tab(self):
         """配置“静态信息”标签页的UI内容"""
         tab_layout = QHBoxLayout(self.static_info_tab)
-        
+
         # --- 左侧布局 (包含目标信息和AIS静态信息) ---
         left_v_layout = QVBoxLayout()
 
@@ -306,7 +332,7 @@ class MainWindow(QWidget):
         # --- 右侧布局 (包含控制操作和日志) ---
         right_v_layout = QVBoxLayout()
         right_v_layout.addWidget(self.create_control_group_static())
-        
+
         # 为静态页签创建独立的日志区
         self.static_log_group = QGroupBox("发送日志 (静态)")
         self.static_log_group.setCheckable(True)
@@ -319,7 +345,7 @@ class MainWindow(QWidget):
         log_layout.addWidget(self.static_log_display)
         self.static_log_group.setLayout(log_layout)
         self.static_log_group.toggled.connect(self.static_log_display.setVisible)
-        
+
         right_v_layout.addWidget(self.static_log_group, stretch=1)
 
         # --- 组合左右布局到静态信息Tab ---
@@ -327,72 +353,102 @@ class MainWindow(QWidget):
         tab_layout.addLayout(right_v_layout, stretch=1)
 
     def setup_playback_tab(self):
-        """配置“回放目标”标签页的UI内容"""
+        """配置“回放目标”标签页的UI内容（重构后）"""
         main_layout = QVBoxLayout(self.playback_tab)
 
-        # --- 上部模块：查询构建器 ---
-        builder_group = QGroupBox("查询条件编辑器")
-        builder_layout = QVBoxLayout()
+        # --- 1. 顶部操作栏 ---
+        top_bar_layout = QHBoxLayout()
+        top_bar_layout.addWidget(QLabel("选择已有记录:"))
+        self.saved_tracks_combo = QComboBox()
+        self.saved_tracks_combo.currentIndexChanged.connect(self.load_saved_track)
+        top_bar_layout.addWidget(self.saved_tracks_combo, 1)
+
+        new_track_btn = QPushButton("清除界面")
+        new_track_btn.clicked.connect(self.handle_new_track_button)
+        top_bar_layout.addWidget(new_track_btn)
+
+        delete_track_btn = QPushButton("删除记录")
+        delete_track_btn.clicked.connect(self.handle_delete_track_button)
+        top_bar_layout.addWidget(delete_track_btn)
+        top_bar_layout.addStretch()
+        main_layout.addLayout(top_bar_layout)
+
+        # --- 2. 查询与结果表格 ---
+        table_group = QGroupBox("查询编辑器与结果")
+        table_layout = QVBoxLayout()
+
+        self.playback_table = QTableWidget()
+        self.playback_table.setColumnCount(8)
+        self.playback_table.setHorizontalHeaderLabels([
+            "轨迹", "MMSI", "ID", "省份",
+            "开始时间", "结束时间", "轨迹点数", "轨迹时长(分)"
+        ])
+        self.playback_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.playback_table.itemChanged.connect(self.handle_draw_trajectory_checkbox)
+
+        # 创建并设置表头的“全选”复选框
+        self.header_checkbox = QCheckBox()
+        self.header_checkbox.stateChanged.connect(self.toggle_all_trajectories)
+        header_widget = QWidget()
+        header_layout = QHBoxLayout(header_widget)
+        header_layout.addWidget(self.header_checkbox)
+        header_layout.setContentsMargins(4, 0, 4, 0)
+        header_layout.setAlignment(Qt.AlignCenter)
+        self.playback_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Fixed)
+        self.playback_table.horizontalHeader().resizeSection(0, 80)
+        self.playback_table.horizontalHeader().setStretchLastSection(False)
+        self.playback_table.setCellWidget(0, 0, header_widget) # 这是一个小技巧，将它放在第一个单元格里模拟表头
+
+        table_layout.addWidget(self.playback_table)
 
         # 添加/删除行按钮
-        builder_btn_layout = QHBoxLayout()
+        row_control_layout = QHBoxLayout()
         add_row_btn = QPushButton("添加查询行")
-        add_row_btn.clicked.connect(self.add_query_row)
+        add_row_btn.clicked.connect(self.add_playback_query_row)
         remove_row_btn = QPushButton("删除选中行")
-        remove_row_btn.clicked.connect(self.remove_selected_query_row)
-        builder_btn_layout.addWidget(add_row_btn)
-        builder_btn_layout.addWidget(remove_row_btn)
-        builder_btn_layout.addStretch()
-        builder_layout.addLayout(builder_btn_layout)
+        remove_row_btn.clicked.connect(self.remove_selected_playback_row)
+        # view_cache_btn = QPushButton("查看缓存数据")
+        # view_cache_btn.clicked.connect(self.show_cached_data)
+        row_control_layout.addStretch()
+        row_control_layout.addWidget(add_row_btn)
+        row_control_layout.addWidget(remove_row_btn)
+        #row_control_layout.addWidget(view_cache_btn)
+        table_layout.addLayout(row_control_layout)
 
-        # 查询构建器表格
-        self.query_builder_table = QTableWidget()
-        self.query_builder_table.setColumnCount(5)
-        self.query_builder_table.setHorizontalHeaderLabels(["MMSI", "ID", "省份", "开始时间", "结束时间"])
-        self.query_builder_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        builder_layout.addWidget(self.query_builder_table)
-        
-        # 添加初始行
-        self.add_query_row()
+        table_group.setLayout(table_layout)
+        main_layout.addWidget(table_group)
 
-        builder_group.setLayout(builder_layout)
-        main_layout.addWidget(builder_group)
-
-        # --- 查询按钮 ---
-        query_btn = QPushButton("批量查询")
-        query_btn.clicked.connect(self.query_trajectory_data)
-        main_layout.addWidget(query_btn)
-
-        # --- 中部模块：结果列表 ---
-        results_group = QGroupBox("查询结果")
-        results_layout = QVBoxLayout()
-        self.trajectory_table = QTableWidget()
-        self.trajectory_table.setColumnCount(4)
-        self.trajectory_table.setHorizontalHeaderLabels(["选择", "MMSI", "ID", "数据点数"])
-        self.trajectory_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.trajectory_table.setSelectionBehavior(QTableWidget.SelectRows)
-        results_layout.addWidget(self.trajectory_table)
-        results_group.setLayout(results_layout)
-        main_layout.addWidget(results_group)
-
-        # --- 下部模块：轨迹预览和发送控制 ---
+        # --- 3. 底部预览与发送 ---
         bottom_group = QGroupBox("轨迹预览与发送")
         bottom_layout = QHBoxLayout()
 
         self.trajectory_scene = QGraphicsScene()
-        self.trajectory_preview = ZoomableView(self.trajectory_scene) # 使用新的ZoomableView
-        
+        self.trajectory_preview = ZoomableView(self.trajectory_scene)
+        # 修复：缩放时不重置视图
+        self.trajectory_preview.zoomed.connect(lambda: self.draw_trajectories(fit_view=False))
         bottom_layout.addWidget(self.trajectory_preview, stretch=4)
 
         send_control_layout = QVBoxLayout()
+        self.show_timestamp_checkbox = QCheckBox("显示时间点")
+        self.show_timestamp_checkbox.stateChanged.connect(self.draw_trajectories)
+
+        save_as_btn = QPushButton("保存")
+        save_as_btn.clicked.connect(self.handle_save_as_button)
         send_btn = QPushButton("开始发送")
         send_btn.clicked.connect(self.start_playback)
+
+        send_control_layout.addWidget(self.show_timestamp_checkbox)
+        send_control_layout.addWidget(save_as_btn)
         send_control_layout.addWidget(send_btn)
         send_control_layout.addStretch()
         bottom_layout.addLayout(send_control_layout, stretch=1)
 
         bottom_group.setLayout(bottom_layout)
         main_layout.addWidget(bottom_group)
+
+        # --- 初始化 ---
+        self.populate_saved_tracks_dropdown()
+        self.add_playback_query_row()
 
     def set_cursors(self):
         """统一设置所有控件的光标样式"""
@@ -416,7 +472,7 @@ class MainWindow(QWidget):
         # 所有文本输入框
         for line_edit in self.findChildren(QLineEdit):
             line_edit.setCursor(ibeam_cursor)
-        
+
         if hasattr(self, 'paste_input'):
             self.paste_input.setCursor(ibeam_cursor)
         if hasattr(self, 'log_display'):
@@ -443,7 +499,7 @@ class MainWindow(QWidget):
             "sost": QComboBox(), "dataStatus": QComboBox(),
             "province": QComboBox()
         }
-        
+
         # 填充下拉列表
         for text, value in self.config['ui_options']['eTargetType'].items():
             self.inputs['eTargetType'].addItem(text, value)
@@ -522,7 +578,7 @@ class MainWindow(QWidget):
         len_layout.addWidget(QLabel("米"))
         grid_layout.addWidget(QLabel("船长:"), 5, 0, Qt.AlignRight)
         grid_layout.addLayout(len_layout, 5, 1)
-        
+
         max_len_layout = QHBoxLayout()
         max_len_layout.addWidget(self.inputs["maxLength"])
         max_len_layout.addWidget(QLabel("米"))
@@ -543,7 +599,7 @@ class MainWindow(QWidget):
         self.data_status_checkbox = QCheckBox("默认")
         self.data_status_checkbox.toggled.connect(self.toggle_data_status_lock)
         data_status_layout.addWidget(self.data_status_checkbox)
-        
+
         grid_layout.addWidget(QLabel("数据状态:"), 7, 2, Qt.AlignRight)
         grid_layout.addLayout(data_status_layout, 7, 3)
 
@@ -600,11 +656,11 @@ class MainWindow(QWidget):
             "decelerate": QRadioButton("均减速"),
             "accelerate": QRadioButton("均加速")
         }
-        
+
         self.motion_button_group.addButton(self.association_options["constant"])
         self.motion_button_group.addButton(self.association_options["decelerate"])
         self.motion_button_group.addButton(self.association_options["accelerate"])
-        
+
         self.association_options["constant"].setChecked(True)
 
         main_layout.addWidget(self.association_options["constant"])
@@ -656,7 +712,7 @@ class MainWindow(QWidget):
         control_layout.setSpacing(5)
         up_btn, down_btn, left_btn, right_btn = QPushButton("↑"), QPushButton("↓"), QPushButton("←"), QPushButton("→")
         up_left_btn, up_right_btn, down_left_btn, down_right_btn = QPushButton("↖"), QPushButton("↗"), QPushButton("↙"), QPushButton("↘")
-        
+
         up_btn.clicked.connect(lambda: self.update_course_from_button(0, self.inputs))
         down_btn.clicked.connect(lambda: self.update_course_from_button(180, self.inputs))
         left_btn.clicked.connect(lambda: self.update_course_from_button(270, self.inputs))
@@ -699,7 +755,7 @@ class MainWindow(QWidget):
         button_layout.addWidget(self.terminate_btn)
         button_layout.addWidget(clear_btn)
         v_layout.addLayout(button_layout)
-        
+
         group_box.setLayout(v_layout)
         return group_box
 
@@ -835,7 +891,7 @@ class MainWindow(QWidget):
             random_len = length - len(prefix)
             random_part = ''.join([str(random.randint(1, 9)) for _ in range(random_len)])
             new_value = prefix + random_part
-            
+
             inputs_dict[field_key].setText(new_value)
             logger(f"已生成随机{field_name_for_log}: {new_value}")
 
@@ -863,7 +919,7 @@ class MainWindow(QWidget):
             widget = self.inputs.get(field_name)
             if widget:
                 widget.setStyleSheet(self.default_lineedit_style)
-        
+
         if self.keep_trend_combo:
             self.keep_trend_combo.setCurrentIndex(0)
         self.association_options["constant"].setChecked(True)
@@ -890,7 +946,7 @@ class MainWindow(QWidget):
                     is_valid = False
                 else:
                     widget.setStyleSheet(self.default_lineedit_style)
-        
+
         if not is_valid:
             self.log_message("错误: 有必填项未填写，请检查红色高亮框。")
         return is_valid
@@ -941,7 +997,7 @@ class MainWindow(QWidget):
             except (ValueError, TypeError):
                 self.log_message("错误: 发送频率必须是一个大于0的数字。")
                 return
-            
+
             self.send_realtime_target_data()
             self.simulation_timer.start(1000) # 实时回填
             self.sending_timer.start(interval_ms)
@@ -1005,12 +1061,12 @@ class MainWindow(QWidget):
                     rate_per_min = float(self.accelerate_input.text())
                     rate_per_sec = rate_per_min / 60.0
                     new_speed += rate_per_sec * duration_sec
-                
+
                 # 4. 使用平均速度计算位移
                 avg_speed = (current_speed + new_speed) / 2.0
-                self.location_calculator.update_params(speed_knots=avg_speed) 
+                self.location_calculator.update_params(speed_knots=avg_speed)
                 new_lat, new_lon = self.location_calculator.calculate_next_point(duration_sec)
-                
+
                 # 5. 重要: 将计算器的速度更新为最终速度，以供后续模拟使用
                 self.location_calculator.update_params(speed_knots=new_speed)
 
@@ -1031,7 +1087,7 @@ class MainWindow(QWidget):
 
             # 7. 使用回填后的新数据发送消息
             self.send_realtime_target_data()
-            
+
             # 8. 恢复正常模拟和发送
             self.simulation_timer.start(1000)
             self.sending_timer.start(int(float(self.frequency_input.text()) * 1000))
@@ -1044,7 +1100,7 @@ class MainWindow(QWidget):
         elif state == "terminated_associated":
             self.association_timer.stop()
             self.log_message(f"终止后等待了 {self.association_seconds} 秒。")
-            
+
             try:
                 # 1. 从UI读取当前值，包括可能已修改的航向
                 start_lat = float(self.inputs['latitude'].text())
@@ -1067,7 +1123,7 @@ class MainWindow(QWidget):
                     rate_per_min = float(self.accelerate_input.text())
                     rate_per_sec = rate_per_min / 60.0
                     new_speed += rate_per_sec * duration_sec
-                
+
                 # 4. 计算新位置
                 avg_speed = (current_speed + new_speed) / 2.0
                 self.location_calculator.update_params(speed_knots=avg_speed)
@@ -1108,7 +1164,7 @@ class MainWindow(QWidget):
         self.log_message("发送已终止。")
 
         if self.keep_trend_combo.currentText() == "是":
-            reply = QMessageBox.question(self, '确认操作', 
+            reply = QMessageBox.question(self, '确认操作',
                                            "下一个目标是否需要关联？",
                                            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
             if reply == QMessageBox.Yes:
@@ -1156,7 +1212,7 @@ class MainWindow(QWidget):
 
     def update_association_timer_display(self):
         """更新时长标签的显示"""
-        self.association_time_label.setText(f"时长: <font color='#3498db'>{self.association_seconds}</font> 秒")
+        self.association_time_label.setText(f"时长: <font color='#3498db'>0</font> 秒")
 
     def update_simulation(self):
         """根据关联模式，实时计算并更新UI上的速度和位置"""
@@ -1179,11 +1235,11 @@ class MainWindow(QWidget):
                 rate_per_min = float(self.accelerate_input.text())
                 rate_per_sec = rate_per_min / 60.0
                 new_speed += rate_per_sec
-            
+
             self.location_calculator.update_params(speed_knots=new_speed, course_degrees=current_course)
-            
+
             new_lat, new_lon = self.location_calculator.calculate_next_point(1.0)
-            
+
             self.inputs['speed'].setText(f"{new_speed:.2f}")
             self.inputs['latitude'].setText(f"{new_lat:.8f}")
             self.inputs['longitude'].setText(f"{new_lon:.8f}")
@@ -1257,7 +1313,7 @@ class MainWindow(QWidget):
                     self._send_ais_static_data()
                 if "BDS" in selected_class:
                     self._send_bds_json_data(selected_class)
-            
+
             if self.is_first_send:
                 self.is_first_send = False
 
@@ -1276,7 +1332,7 @@ class MainWindow(QWidget):
                 if rule['ui_class'] == selected_class and rule['ui_state'] == selected_state:
                     eTargetType_val = rule['eTargetType']
                     break
-        
+
         target.id = self.get_field_value("id", int, 0)
         if (target.id == 0) & (selected_class != "BDS"):
             self._generate_random_value("id", "ID", self.inputs, self.log_message)
@@ -1360,7 +1416,7 @@ class MainWindow(QWidget):
         if not mmsi:
             self.log_message("信息: MMSI为空，跳过发送AIS静态信息。")
             return
-        
+
         static_topic = self.config['kafka'].get('ais_static_topic')
         if not static_topic:
             self.log_message("警告: 在 config.json 中未找到 'ais_static_topic'。")
@@ -1369,7 +1425,7 @@ class MainWindow(QWidget):
         ais_info = {"MMSI": mmsi, "Vessel Name": self.get_field_value("vesselName")}
         json_payload = {"AisExts": [ais_info]}
         json_data = json.dumps(json_payload, ensure_ascii=False, indent=2)
-        
+
         self.kafka_producer.send_message(static_topic, json_data.encode('utf-8'))
         self.log_message(f"已向 Topic '{static_topic}' 发送AIS静态JSON消息。")
 
@@ -1407,7 +1463,7 @@ class MainWindow(QWidget):
             "status": 0, "terminal":self.get_field_value("bds", float, 0.0),
             "tilt": 0, "utc": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
         }
-        
+
         json_data = json.dumps(bds_payload, ensure_ascii=False, indent=2)
         self.kafka_producer.send_message(bds_topic, json_data.encode('utf-8'))
         self.log_message(f"已向 Topic '{bds_topic}' 发送 BDS JSON 消息。")
@@ -1450,7 +1506,7 @@ class MainWindow(QWidget):
                 widget = self.static_inputs.get(field_name)
                 if not widget:
                     return default_value
-                
+
                 text = ""
                 if isinstance(widget, QLineEdit):
                     text = widget.text()
@@ -1560,11 +1616,11 @@ class MainWindow(QWidget):
                 logger("错误: 发送频率必须是一个大于0的数字。将使用默认值3秒。")
                 interval_ms = 3000
                 freq_input.setText("3")
-            
+
             log_msg = f"开始发送数据... (频率: {interval_ms / 1000}s/次)" if not stop_btn.isEnabled() else f"继续发送数据... (频率: {interval_ms / 1000}s/次)"
             logger(log_msg)
             if not stop_btn.isEnabled(): send_func()
-            
+
             timer.start(interval_ms)
             start_btn.setText("暂停发送")
             stop_btn.setEnabled(True)
@@ -1591,364 +1647,641 @@ class MainWindow(QWidget):
             data_status_combo.setCurrentIndex(0)
 
     # ===================================================================
-    # 回放及其他
+    # 回放模块 - 逻辑 (重构后)
     # ===================================================================
 
-    def query_trajectory_data(self):
-        """从查询构建器表格中读取所有行，并从数据库查询轨迹数据"""
-        if not self.db:
-            self.log_message("错误: 数据库未初始化。")
+    def populate_saved_tracks_dropdown(self):
+        """加载/更新“选择已有记录”下拉框"""
+        self.saved_tracks_combo.blockSignals(True)
+        self.saved_tracks_combo.clear()
+        self.saved_tracks_combo.addItem("--- 新建查询 ---", "")
+        try:
+            files = [f for f in os.listdir(self.data_track_dir) if f.endswith('.json')]
+            for filename in sorted(files):
+                self.saved_tracks_combo.addItem(os.path.splitext(filename)[0], filename)
+        except Exception as e:
+            self.log_message(f"错误: 无法读取轨迹记录目录 '{self.data_track_dir}': {e}", "playback")
+        self.saved_tracks_combo.blockSignals(False)
+
+    def load_saved_track(self, index):
+        """从下拉框选择并加载一个已保存的轨迹记录文件"""
+        filename = self.saved_tracks_combo.itemData(index)
+        if not filename:
             return
 
-        all_identifiers = set()
-        overall_start_time = QDateTime.fromString("9999-12-31 23:59:59", "yyyy-MM-dd HH:mm:ss")
-        overall_end_time = QDateTime.fromString("2000-01-01 00:00:00", "yyyy-MM-dd HH:mm:ss")
-        
-        has_valid_query = False
-        for row in range(self.query_builder_table.rowCount()):
-            mmsi_item = self.query_builder_table.item(row, 0)
-            id_item = self.query_builder_table.item(row, 1)
-            start_time_widget = self.query_builder_table.cellWidget(row, 3)
-            end_time_widget = self.query_builder_table.cellWidget(row, 4)
+        filepath = os.path.join(self.data_track_dir, filename)
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                saved_data = json.load(f)
 
-            mmsi = mmsi_item.text().strip() if mmsi_item else ""
-            target_id = id_item.text().strip() if id_item else ""
+            # 1. 清空现有状态
+            self.playback_table.setRowCount(0)
+            self.playback_query_cache.clear()
 
-            if mmsi: all_identifiers.add(mmsi)
-            if target_id: all_identifiers.add(target_id)
+            # 2. 优先加载数据缓存
+            saved_cache = saved_data.get("cache", {})
+            # 由于json的key是字符串，需要转回int
+            self.playback_query_cache = {int(k): v for k, v in saved_cache.items()}
 
-            if start_time_widget and end_time_widget:
-                start_dt = start_time_widget.dateTime()
-                end_dt = end_time_widget.dateTime()
-                if start_dt < overall_start_time:
-                    overall_start_time = start_dt
-                if end_dt > overall_end_time:
-                    overall_end_time = end_dt
-                has_valid_query = True
+            # 3. 使用加载的缓存来重建UI表格
+            queries = saved_data.get("queries", [])
+            for i, query_params in enumerate(queries):
+                self.add_playback_query_row(params=query_params)
 
-        if not all_identifiers:
-            self.log_message("查询构建器中没有任何有效的MMSI或ID。")
-            return
-        
-        if not has_valid_query:
-            self.log_message("查询构建器中没有有效的时间范围。")
-            return
+            self.log_message(f"已加载记录: {self.saved_tracks_combo.currentText()}", "playback")
+            self.draw_trajectories() # 加载后自动绘制轨迹
 
-        results = self.db.query_trajectories(
-            criteria={
-                'mmsi': self.playback_inputs['mmsi'].text(),
-                'id': self.playback_inputs['id'].text()
-            },
-            start_time=overall_start_time.toString("yyyy-MM-dd HH:mm:ss"),
-            end_time=overall_end_time.toString("yyyy-MM-dd HH:mm:ss")
-        )
+        except Exception as e:
+            self.log_message(f"错误: 加载文件 '{filename}' 失败: {e}", "playback")
 
-        if results is None:
-            self.log_message("数据库查询失败，请检查日志。")
-            self.trajectory_data.clear()
-            self.update_trajectory_table()
+    def handle_new_track_button(self):
+        """处理“新增”按钮，清空表格以开始新的查询"""
+        self.saved_tracks_combo.setCurrentIndex(0)
+        self.playback_table.setRowCount(0)
+        self.playback_query_cache.clear()
+        self.add_playback_query_row()
+        self.trajectory_scene.clear()
+        self.log_message("已新建查询。", "playback")
+
+    def handle_delete_track_button(self):
+        """删除当前选中的已保存记录"""
+        current_file = self.saved_tracks_combo.currentData()
+        if not current_file:
+            QMessageBox.warning(self, "操作无效", "请先从下拉框中选择一个要删除的记录。")
             return
 
-        self.trajectory_data.clear()
-        for row in results:
-            row_dict = row._asdict()
-            key = row_dict.get('mmsi') if row_dict.get('mmsi') else row_dict.get('id')
-            if key:
-                key_str = str(key)
-                if key_str not in self.trajectory_data:
-                    self.trajectory_data[key_str] = []
-                self.trajectory_data[key_str].append(row_dict)
+        reply = QMessageBox.question(self, '确认操作',
+                                       f"确定要删除记录 '{self.saved_tracks_combo.currentText()}' 吗?\n此操作不可恢复。",
+                                       QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if reply == QMessageBox.Yes:
+            try:
+                os.remove(os.path.join(self.data_track_dir, current_file))
+                self.log_message(f"记录 '{self.saved_tracks_combo.currentText()}' 已被删除。", "playback")
+                self.populate_saved_tracks_dropdown()
+                self.handle_new_track_button()
+            except Exception as e:
+                self.log_message(f"错误: 删除文件失败: {e}", "playback")
 
-        self.update_trajectory_table()
-        self.log_message(f"查询完成，共找到 {len(results)} 个数据点，{len(self.trajectory_data)} 个目标。")
+    def add_playback_query_row(self, params=None):
+        """向回放表格中添加一个查询行，并可选择性地填充数据"""
+        if not isinstance(params, dict):
+            params = {}
 
-    def add_query_row(self):
-        """向查询构建器表格中添加一个新行"""
-        row_position = self.query_builder_table.rowCount()
-        self.query_builder_table.insertRow(row_position)
+        row = self.playback_table.rowCount()
+        self.playback_table.insertRow(row)
 
-        self.query_builder_table.setItem(row_position, 0, QTableWidgetItem(""))
-        self.query_builder_table.setItem(row_position, 1, QTableWidgetItem(""))
-        self.query_builder_table.setItem(row_position, 2, QTableWidgetItem(""))
+        # 1. 绘制轨迹 (复选框)
+        chk_box_item = QTableWidgetItem()
+        chk_box_item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
+        chk_box_item.setCheckState(Qt.Checked if params.get("draw", True) else Qt.Unchecked)
+        self.playback_table.setItem(row, 0, chk_box_item)
 
-        start_time_edit = QDateTimeEdit(QDateTime.currentDateTime().addDays(-1))
+        # 2. MMSI
+        mmsi_item = QTableWidgetItem(params.get("mmsi", ""))
+        self.playback_table.setItem(row, 1, mmsi_item)
+
+        # 3. ID
+        id_item = QTableWidgetItem(params.get("id", ""))
+        self.playback_table.setItem(row, 2, id_item)
+
+        # 4. 省份
+        province_combo = QComboBox()
+        province_combo.addItem("全部", 0)
+        if self.config['ui_options'].get('province'):
+            for province_item in self.config['ui_options']['province']:
+                province_combo.addItem(province_item['name'], province_item['adapterId'])
+        if "province_id" in params:
+            index = province_combo.findData(params["province_id"])
+            if index != -1:
+                province_combo.setCurrentIndex(index)
+        self.playback_table.setCellWidget(row, 3, province_combo)
+
+        # 5. 开始时间 (默认为近30分钟)
+        start_dt_str = params.get("start_time")
+        start_dt = QDateTime.fromString(start_dt_str, "yyyy-MM-dd HH:mm:ss") if start_dt_str else QDateTime.currentDateTime().addSecs(-1800)
+        start_time_edit = QDateTimeEdit(start_dt)
         start_time_edit.setDisplayFormat("yyyy-MM-dd HH:mm:ss")
-        self.query_builder_table.setCellWidget(row_position, 3, start_time_edit)
+        start_time_edit.setCalendarPopup(True)
+        self.playback_table.setCellWidget(row, 4, start_time_edit)
 
-        end_time_edit = QDateTimeEdit(QDateTime.currentDateTime())
+        # 6. 结束时间
+        end_dt = QDateTime.fromString(params.get("end_time"), "yyyy-MM-dd HH:mm:ss") if "end_time" in params else QDateTime.currentDateTime()
+        end_time_edit = QDateTimeEdit(end_dt)
         end_time_edit.setDisplayFormat("yyyy-MM-dd HH:mm:ss")
-        self.query_builder_table.setCellWidget(row_position, 4, end_time_edit)
+        end_time_edit.setCalendarPopup(True)
+        self.playback_table.setCellWidget(row, 5, end_time_edit)
 
-    def remove_selected_query_row(self):
-        """从查询构建器表格中删除选中的行"""
-        selected_rows = sorted(list(set(index.row() for index in self.query_builder_table.selectedIndexes())), reverse=True)
+        # 7. 轨迹点数
+        points = self.playback_query_cache.get(row, {}).get("points", [])
+        point_count = len(points)
+        count_item = QTableWidgetItem(str(point_count))
+        count_item.setFlags(count_item.flags() & ~Qt.ItemIsEditable)
+        self.playback_table.setItem(row, 6, count_item)
+
+        # 8. 轨迹时长
+        duration_str = "0.0"
+        if point_count > 1:
+            try:
+                lasttms = [p.get('lastTm', 0) for p in points]
+                #print(lasttms, "lasttms")
+                time_diff_ms = max(lasttms) - min(lasttms)
+                time_diff_min = round((time_diff_ms / 1000) / 60, 1)
+                duration_str = str(time_diff_min)
+            except (ValueError, TypeError):
+                duration_str = "Error" # Handle potential errors in data
+        
+        duration_item = QTableWidgetItem(duration_str)
+        duration_item.setFlags(duration_item.flags() & ~Qt.ItemIsEditable) # 时长不可编辑
+        self.playback_table.setItem(row, 7, duration_item)
+
+    def remove_selected_playback_row(self):
+        """从回放表格中删除选中的行"""
+        selected_rows = sorted(list(set(index.row() for index in self.playback_table.selectedIndexes())), reverse=True)
         if not selected_rows:
-            self.log_message("请先在查询编辑器中选择要删除的行。")
+            QMessageBox.warning(self, "操作无效", "请先选择要删除的行。")
             return
         for row in selected_rows:
-            self.query_builder_table.removeRow(row)
-        self.log_message(f"已删除 {len(selected_rows)} 行。")
+            self.playback_table.removeRow(row)
+            if row in self.playback_query_cache:
+                del self.playback_query_cache[row]
+        self.log_message(f"已删除 {len(selected_rows)} 行查询。", "playback")
+        self.draw_trajectories()
 
-    def update_trajectory_table(self):
-        """更新查询结果到UI表格"""
-        self.trajectory_table.setRowCount(0)
-        for key, points in self.trajectory_data.items():
-            row_position = self.trajectory_table.rowCount()
-            self.trajectory_table.insertRow(row_position)
-            
-            chk_box_item = QTableWidgetItem()
-            chk_box_item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
-            chk_box_item.setCheckState(Qt.Unchecked)
-            
-            self.trajectory_table.setItem(row_position, 0, chk_box_item)
-            self.trajectory_table.setItem(row_position, 1, QTableWidgetItem(str(points[0].get('mmsi', 'N/A'))))
-            self.trajectory_table.setItem(row_position, 2, QTableWidgetItem(str(points[0].get('id', 'N/A'))))
-            self.trajectory_table.setItem(row_position, 3, QTableWidgetItem(str(len(points))))
-        
-        self.trajectory_table.itemClicked.connect(self.draw_trajectories)
-
-    def draw_trajectories(self, item):
-        """在预览区绘制所有被勾选的轨迹，并应用新的样式和交互。"""
+    def handle_draw_trajectory_checkbox(self, item):
+        """当“绘制轨迹”复选框状态改变时触发查询和绘制"""
         if item.column() != 0:
             return
 
-        self.trajectory_scene.clear()
-        min_lon, max_lon, min_lat, max_lat = 181, -181, 91, -91
+        row = item.row()
+        is_checked = item.checkState() == Qt.Checked
+
+        if not is_checked:
+            self.draw_trajectories() # 如果是取消勾选，直接重绘
+            return
+
+        # --- 开始查询逻辑 ---
+        if not hasattr(self, 'db') or not self.db:
+            self.log_message("错误: 数据库对象未初始化。", "playback")
+            item.setCheckState(Qt.Unchecked)
+            return
+        if not self.db.is_connected:
+            self.log_message("错误: 数据库未连接，无法查询。", "playback")
+            item.setCheckState(Qt.Unchecked)
+            return
+
+        # 从表格中提取当前行的查询参数
+        try:
+            mmsi = self.playback_table.item(row, 1).text().strip()
+            target_id = self.playback_table.item(row, 2).text().strip()
+            province_combo = self.playback_table.cellWidget(row, 3)
+            province_id = province_combo.currentData()
+            start_time = self.playback_table.cellWidget(row, 4).dateTime().toString("yyyy-MM-dd HH:mm:ss")
+            end_time = self.playback_table.cellWidget(row, 5).dateTime().toString("yyyy-MM-dd HH:mm:ss")
+
+            if not mmsi and not target_id:
+                self.log_message(f"第 {row+1} 行: MMSI和ID至少需要一个才能查询。", "playback")
+                item.setCheckState(Qt.Unchecked)
+                return
+
+            current_params = {
+                "mmsi": mmsi, "id": target_id, "province_id": province_id,
+                "start_time": start_time, "end_time": end_time
+            }
+        except Exception as e:
+            self.log_message(f"错误: 读取第 {row+1} 行查询参数失败: {e}", "playback")
+            item.setCheckState(Qt.Unchecked)
+            return
+
+        # 检查缓存
+        cached_entry = self.playback_query_cache.get(row)
+        if cached_entry and cached_entry.get("params") == current_params:
+            self.log_message(f"第 {row+1} 行: 使用缓存数据进行绘制。", "playback")
+            self.draw_trajectories()
+            return
+
+        # 执行数据库查询
+        self.log_message(f"第 {row+1} 行: 正在查询数据库...", "playback")
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+
+        results = self.db.query_trajectories(
+            criteria={'mmsi': mmsi, 'id': target_id, 'province_id': province_id},
+            start_time=start_time,
+            end_time=end_time
+        )
+        QApplication.restoreOverrideCursor()
+
+        if results is None:
+            self.log_message("数据库查询失败，请检查日志。", "playback")
+            item.setCheckState(Qt.Unchecked)
+            return
+
+        points = [row._asdict() for row in results]
+        point_count = len(points)
+
+        # 更新缓存和UI
+        self.playback_query_cache[row] = {"params": current_params, "points": points}
+        self.playback_table.item(row, 6).setText(str(point_count))
         
-        selected_keys = []
-        for i in range(self.trajectory_table.rowCount()):
-            if self.trajectory_table.item(i, 0).checkState() == Qt.Checked:
-                mmsi = self.trajectory_table.item(i, 1).text()
-                target_id = self.trajectory_table.item(i, 2).text()
-                key = mmsi if mmsi != 'N/A' else target_id
-                selected_keys.append(key)
-
-        if not selected_keys:
-            self.trajectory_preview.fitInView(self.trajectory_scene.itemsBoundingRect(), Qt.KeepAspectRatio)
-            return
-
-        all_points_for_bounds = []
-        for key in selected_keys:
-            points = self.trajectory_data.get(key)
-            if points:
-                all_points_for_bounds.extend(points)
-
-        for p in all_points_for_bounds:
+        # 计算并更新轨迹时长
+        duration_str = "0.0"
+        if point_count > 1:
             try:
-                lon, lat = float(p['longitude']), float(p['latitude'])
-                if 180 >= lon >= -180 and 90 >= lat >= -90:
-                    min_lon, max_lon = min(min_lon, lon), max(max_lon, lon)
-                    min_lat, max_lat = min(min_lat, lat), max(max_lat, lat)
+                lasttms = [p.get('lastTm', 0) for p in points]
+                time_diff_ms = max(lasttms) - min(lasttms)
+                time_diff_min = round((time_diff_ms / 1000) / 60, 1)
+                duration_str = str(time_diff_min)
             except (ValueError, TypeError):
-                continue
+                duration_str = "Error"
 
-        if min_lon > 180:
+        duration_item = QTableWidgetItem(duration_str)
+        duration_item.setFlags(duration_item.flags() & ~Qt.ItemIsEditable)
+        self.playback_table.setItem(row, 7, duration_item)
+
+
+        self.log_message(f"第 {row+1} 行: 查询到 {point_count} 个点。", "playback")
+
+        self.draw_trajectories()
+
+    def toggle_all_trajectories(self, state):
+        """全选/全不选所有行的“绘制轨迹”复选框"""
+        is_checked = state == Qt.Checked
+        self.playback_table.itemChanged.disconnect(self.handle_draw_trajectory_checkbox)
+        for row in range(self.playback_table.rowCount()):
+            item = self.playback_table.item(row, 0)
+            if item:
+                item.setCheckState(Qt.Checked if is_checked else Qt.Unchecked)
+        self.playback_table.itemChanged.connect(self.handle_draw_trajectory_checkbox)
+
+        # 触发一次查询/绘制
+        if self.playback_table.rowCount() > 0:
+            self.handle_draw_trajectory_checkbox(self.playback_table.item(0, 0))
+
+
+    def handle_save_as_button(self):
+        """弹出对话框，将当前查询配置和缓存数据保存到文件"""
+        text, ok = QInputDialog.getText(self, '保存', '输入记录名称:')
+        if ok and text:
+            filename = f"{text}.json"
+            filepath = os.path.join(self.data_track_dir, filename)
+
+            # 准备要保存的数据
+            data_to_save = {"queries": [], "cache": self.playback_query_cache}
+            for row in range(self.playback_table.rowCount()):
+                params = {
+                    "draw": self.playback_table.item(row, 0).checkState() == Qt.Checked,
+                    "mmsi": self.playback_table.item(row, 1).text(),
+                    "id": self.playback_table.item(row, 2).text(),
+                    "province_id": self.playback_table.cellWidget(row, 3).currentData(),
+                    "start_time": self.playback_table.cellWidget(row, 4).dateTime().toString("yyyy-MM-dd HH:mm:ss"),
+                    "end_time": self.playback_table.cellWidget(row, 5).dateTime().toString("yyyy-MM-dd HH:mm:ss"),
+                    "interval": self.playback_table.item(row, 7).text()
+                }
+                data_to_save["queries"].append(params)
+
+            try:
+                with open(filepath, 'w', encoding='utf-8') as f:
+                    # 使用自定义的序列化函数来处理datetime等特殊类型
+                    json.dump(data_to_save, f, indent=4, ensure_ascii=False, default=json_serial)
+                
+                self.log_message(f"成功将当前查询保存为 '{filename}'", "playback")
+                
+                # 刷新下拉框并自动选中刚保存的项
+                self.populate_saved_tracks_dropdown()
+                index = self.saved_tracks_combo.findData(filename)
+                if index != -1:
+                    self.saved_tracks_combo.setCurrentIndex(index)
+                    
+            except TypeError as e:
+                self.log_message(f"错误: 保存文件时发生序列化错误: {e}", "playback")
+            except Exception as e:
+                self.log_message(f"错误: 保存文件失败: {e}", "playback")
+
+    def draw_trajectories(self, item=None, fit_view=True):
+        """
+        在预览区绘制所有被勾选的轨迹，并实现高级可视化功能。
+        """
+        self.trajectory_scene.clear()
+        
+        # 1. 收集所有需要绘制的、经过排序的轨迹数据
+        selected_rows_with_data = []
+        for row in range(self.playback_table.rowCount()):
+            checkbox_item = self.playback_table.item(row, 0)
+            if checkbox_item and checkbox_item.checkState() == Qt.Checked:
+                cached_data = self.playback_query_cache.get(row)
+                if cached_data and cached_data.get("points"):
+                    sorted_points = sorted(cached_data["points"], key=lambda p: p.get('lasttm', 0))
+                    if sorted_points:
+                        selected_rows_with_data.append(sorted_points)
+
+        if not selected_rows_with_data:
+            from PyQt5.QtCore import QRectF
+            self.trajectory_preview.setSceneRect(QRectF())
             return
 
-        lon_margin = (max_lon - min_lon) * 0.1 if max_lon > min_lon else 0.1
-        lat_margin = (max_lat - min_lat) * 0.1 if max_lat > min_lat else 0.1
-        scene_lon_min, scene_lon_max = min_lon - lon_margin, max_lon + lon_margin
-        scene_lat_min, scene_lat_max = min_lat - lat_margin, max_lat + lat_margin
-        self.trajectory_scene.setSceneRect(scene_lon_min, -scene_lat_max, scene_lon_max - scene_lon_min, scene_lat_max - scene_lat_min)
-
+        # 2. 定义调色板
         palette = [QColor("#1f77b4"), QColor("#ff7f0e"), QColor("#2ca02c"), QColor("#d62728"),
                    QColor("#9467bd"), QColor("#8c564b"), QColor("#e377c2"), QColor("#7f7f7f")]
-        
-        for i, key in enumerate(selected_keys):
-            points = self.trajectory_data.get(key)
-            if not points: continue
-            
-            points.sort(key=lambda p: p.get('lastTm', 0))
-            
-            sampled_points = []
-            if len(points) > 30:
-                step = len(points) / 30.0
-                for j in range(30):
-                    index = int(j * step)
-                    if index < len(points):
-                        sampled_points.append(points[index])
-            else:
-                sampled_points = points
+        latest_point_color = QColor("#FF0000") # 红色高亮
 
-            if len(sampled_points) < 1: continue
+        # 3. 准备绘制
+        from PyQt5.QtCore import QRectF
+        from PyQt5.QtGui import QPainterPath, QFont
+        import datetime
 
-            pen_color = palette[i % len(palette)]
-            path_pen = QPen(pen_color, 1, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
-            
-            path = QPainterPath()
+        full_bounding_rect = QRectF()
+        all_paths = []
+        all_points_to_draw = []
+        latest_points_to_draw = []
+        points_for_labels = []
+
+        for i, points in enumerate(selected_rows_with_data):
+            color = palette[i % len(palette)]
             
             valid_points = []
-            for p in sampled_points:
+            for p in points:
                 try:
                     lon, lat = float(p['longitude']), float(p['latitude'])
-                    if 180 >= lon >= -180 and 90 >= lat >= -90:
-                        valid_points.append((lon, -lat))
+                    if -180 <= lon <= 180 and -90 <= lat <= 90:
+                        valid_points.append({
+                            'lon': lon, 'lat': lat, 'color': color, 
+                            'lasttm': p.get('lastTm', 0),
+                            'lastdt': p.get('lastDT', 'N/A')
+                        })
                 except (ValueError, TypeError, KeyError):
                     continue
             
-            if not valid_points: continue
+            if not valid_points:
+                continue
 
-            path.moveTo(valid_points[0][0], valid_points[0][1])
+            # 通过比较 lasttm 时间戳，找到当前轨迹中的最新点
+            latest_points_to_draw.append(max(valid_points, key=lambda p: p['lasttm']))
+
+            path = QPainterPath()
+            path.moveTo(valid_points[0]['lon'], -valid_points[0]['lat'])
+            for p in valid_points[1:]:
+                path.lineTo(p['lon'], -p['lat'])
             
-            point_brush = QBrush(pen_color)
-            point_size = (scene_lon_max - scene_lon_min) / 200000.0
+            all_paths.append({'path': path, 'color': color})
+            full_bounding_rect = full_bounding_rect.united(path.boundingRect())
+
+            # 优化抽稀逻辑
+            if self.show_timestamp_checkbox.isChecked():
+                if len(valid_points) > 30:
+                    sampled_indices = {0, len(valid_points) - 1}
+                    step = (len(valid_points) - 1) / 29.0
+                    for j in range(1, 29):
+                        index = round(j * step)
+                        if 0 < index < len(valid_points) - 1:
+                            sampled_indices.add(index)
+                    points_for_labels.extend([valid_points[k] for k in sorted(list(sampled_indices))])
+                else:
+                    points_for_labels.extend(valid_points)
             
-            for j in range(len(valid_points)):
-                if j > 0:
-                    path.lineTo(valid_points[j][0], valid_points[j][1])
-                self.trajectory_scene.addEllipse(
-                    valid_points[j][0] - point_size / 2, 
-                    valid_points[j][1] - point_size / 2, 
-                    point_size, point_size, 
-                    path_pen, point_brush
-                )
+            all_points_to_draw.extend(valid_points)
+            #print("points_for_labels:", len(points_for_labels))
 
-            self.trajectory_scene.addPath(path, path_pen)
+        if not full_bounding_rect.isValid():
+            return
 
-        self.trajectory_preview.fitInView(self.trajectory_scene.itemsBoundingRect(), Qt.KeepAspectRatio)
+        if fit_view:
+            self.trajectory_preview.fitInView(full_bounding_rect, Qt.KeepAspectRatio)
+
+        # 绘图元素
+        line_pen = QPen()
+        line_pen.setWidth(0) 
+        line_pen.setCosmetic(True)
+        point_pen = QPen(Qt.transparent)
+        point_brush = QBrush(Qt.SolidPattern)
+        
+        # 绘制轨迹线
+        for path_info in all_paths:
+            line_pen.setColor(path_info['color'])
+            self.trajectory_scene.addPath(path_info['path'], line_pen)
+
+        # 绘制所有轨迹点
+        pixel_size = 4
+        point_size = pixel_size / self.trajectory_preview.transform().m11()
+        for p in all_points_to_draw:
+            point_brush.setColor(p['color'])
+            self.trajectory_scene.addEllipse(p['lon'] - point_size / 2, -p['lat'] - point_size / 2, point_size, point_size, point_pen, point_brush)
+
+        # 高亮绘制最新点
+        pixel_size_latest = 15
+        point_size_latest = pixel_size_latest / self.trajectory_preview.transform().m11()
+        point_brush.setColor(latest_point_color)
+        for p in latest_points_to_draw:
+            self.trajectory_scene.addEllipse(p['lon'] - point_size_latest / 2, -p['lat'] - point_size_latest / 2, point_size_latest, point_size_latest, point_pen, point_brush)
+
+        # 绘制自适应标签
+        if self.show_timestamp_checkbox.isChecked():
+            font = QFont("Arial", 8)
+
+            for p in points_for_labels:
+                dt_obj = p['lastdt']
+                time_str = ""
+                try:
+                    if isinstance(dt_obj, datetime.datetime):
+                        time_str = dt_obj.strftime('%Y-%m-%d %H:%M:%S')
+                    elif isinstance(dt_obj, (int, float)):
+                        # 假设是毫秒级时间戳
+                        dt_obj = datetime.datetime.fromtimestamp(dt_obj / 1000)
+                        time_str = dt_obj.strftime('%H:%M:%S')
+                    else:
+                        # 保持对 "YYYY-MM-DD HH:MM:SS" 格式字符串的兼容
+                        time_str = str(dt_obj).split(' ')[-1] if ' ' in str(dt_obj) else str(dt_obj)
+                except (ValueError, TypeError):
+                    time_str = "InvalidTime" # 处理转换异常
+
+                label = QGraphicsSimpleTextItem(time_str)
+                label.setFont(font)
+                label.setBrush(p['color'])
+                label.setFlag(QGraphicsItem.ItemIgnoresTransformations)
+
+                pixel_offset = 4 / self.trajectory_preview.transform().m11()
+                label.setPos(p['lon'] + pixel_offset, -p['lat'] - pixel_offset)
+
+                self.trajectory_scene.addItem(label)
 
     def start_playback(self):
-        """开始回放选中的轨迹"""
-        self.playback_targets.clear()
-        for i in range(self.trajectory_table.rowCount()):
-            if self.trajectory_table.item(i, 0).checkState() == Qt.Checked:
-                mmsi = self.trajectory_table.item(i, 1).text()
-                target_id = self.trajectory_table.item(i, 2).text()
-                key = mmsi if mmsi != 'N/A' else target_id
-                
-                if key in self.trajectory_data:
-                    sorted_points = sorted(self.trajectory_data[key], key=lambda p: p['lastTm'])
-                    self.playback_targets.extend(sorted_points)
-        
+        """开始回放所有选中的轨迹数据"""
+        self.playback_targets = []
+        total_points = 0
+
+        for row in range(self.playback_table.rowCount()):
+            checkbox_item = self.playback_table.item(row, 0)
+            if not (checkbox_item and checkbox_item.checkState() == Qt.Checked):
+                continue
+
+            cached_data = self.playback_query_cache.get(row)
+            if not (cached_data and cached_data.get("points")):
+                self.log_message(f"警告: 第 {row+1} 行被勾选但无数据，已跳过。", "playback")
+                continue
+
+            try:
+                interval = int(self.playback_table.item(row, 7).text())
+                if interval <= 0:
+                    self.log_message(f"警告: 第 {row+1} 行间隔无效，已跳过。", "playback")
+                    continue
+            except (ValueError, TypeError):
+                self.log_message(f"警告: 第 {row+1} 行间隔不是有效数字，已跳过。", "playback")
+                continue
+
+            points = sorted(cached_data["points"], key=lambda p: p.get('lastTm', 0))
+            self.playback_targets.append({
+                "points": points,
+                "interval": interval,
+                "current_index": 0
+            })
+            total_points += len(points)
+
         if not self.playback_targets:
-            self.log_message("没有选择要回放的目标。")
+            QMessageBox.warning(self, "无数据", "没有可供回放的数据。请先查询并勾选轨迹。")
             return
 
-        self.playback_targets.sort(key=lambda p: p['lastTm'])
-        self.current_playback_index = 0
-        self.log_message(f"准备回放 {len(self.playback_targets)} 个数据点。")
-        self.playback_timer.start(10)
+        self.log_message(f"准备回放 {len(self.playback_targets)} 条轨迹，共 {total_points} 个点。", "playback")
+
+        # 使用一个主定时器来驱动所有轨迹的回放
+        self.playback_timer.start(10) # 使用一个较小的基础间隔来检查
 
     def send_playback_data(self):
-        """发送单个轨迹点并设置下一个定时器"""
-        if self.current_playback_index >= len(self.playback_targets):
+        """定时器调用的核心发送逻辑"""
+        active_targets_exist = False
+
+        for target_info in self.playback_targets:
+            # 检查此轨迹是否已播放完毕
+            if target_info["current_index"] >= len(target_info["points"]):
+                continue
+
+            active_targets_exist = True
+
+            # 检查是否到了发送时间
+            now = time.time() * 1000
+            if "last_sent_time" not in target_info:
+                target_info["last_sent_time"] = 0
+
+            if now - target_info["last_sent_time"] >= target_info["interval"]:
+                point_data = target_info["points"][target_info["current_index"]]
+
+                # --- 构建Protobuf消息 ---
+                try:
+                    target_list = target_pb2.TargetProtoList()
+                    target = target_list.list.add()
+
+                    # 从字典填充Protobuf对象
+                    for key, value in point_data.items():
+                        if key == 'pos': # pos是嵌套消息
+                            pos_dict = json.loads(value) if isinstance(value, str) else value
+                            for pos_key, pos_value in pos_dict.items():
+                                if hasattr(target.pos, pos_key):
+                                    setattr(target.pos, pos_key, pos_value)
+                        elif hasattr(target, key):
+                            # 类型转换和兼容性处理
+                            field_type = type(getattr(target, key))
+                            if field_type is int and value is not None:
+                                setattr(target, key, int(value))
+                            elif field_type is float and value is not None:
+                                setattr(target, key, float(value))
+                            elif value is not None:
+                                setattr(target, key, value)
+
+                    # 确保关键字段存在
+                    target.lastTm = int(time.time() * 1000)
+                    target.status = 2 # 回放数据总是update
+
+                    # 发送
+                    pb_data = target_list.SerializeToString()
+                    topic = self.config['kafka']['topic']
+                    self.kafka_producer.send_message(topic, pb_data)
+
+                    self.log_message(f"回放: 发送点 {self.current_playback_index + 1}/{len(self.playback_targets)} (ID: {target.id}, MMSI: {pos_info.mmsi}, Time: {point_data.get('lastDT', 'N/A')})", "playback")
+
+                    target_info["current_index"] += 1
+                    target_info["last_sent_time"] = now
+
+                except Exception as e:
+                    self.log_message(f"错误: 回放时构建或发送Protobuf失败: {e}", "playback")
+                    # 发生错误时，停止此条轨迹的播放
+                    target_info["current_index"] = len(target_info["points"])
+
+
+        if not active_targets_exist:
             self.playback_timer.stop()
-            self.log_message("回放完成。")
-            return
+            self.log_message("所有轨迹回放完毕。", "playback")
 
-        point = self.playback_targets[self.current_playback_index]
-        
-        target_list = target_pb2.TargetProtoList()
-        target = target_list.list.add()
-        
-        target.id = point.get('id', 0)
-        target.lastTm = point.get('lastTm', int(time.time()))
-        target.sost = 1
-        target.eTargetType = 14
-        
-        pos_info = target.pos
-        pos_info.id = target.id
-        pos_info.mmsi = point.get('mmsi', 0)
-        pos_info.vesselName = point.get('vesselName', '')
-        pos_info.speed = point.get('speed', 0.0)
-        pos_info.course = point.get('course', 0.0)
-        pos_info.len = int(point.get('len', 0) or 0)
-        pos_info.shiptype = int(point.get('shipType', 99) or 99)
-        
-        geo_ptn = pos_info.geoPtn
-        geo_ptn.longitude = point.get('longitude', 0.0)
-        geo_ptn.latitude = point.get('latitude', 0.0)
-
-        pb_data = target_list.SerializeToString()
-        topic = self.config['kafka']['topic']
-        self.kafka_producer.send_message(topic, pb_data)
-        self.log_message(f"发送回放数据点: MMSI={pos_info.mmsi}, Time={target.lastTm}")
-
-        self.update_playback_preview(geo_ptn.longitude, geo_ptn.latitude)
-
-        self.current_playback_index += 1
-        if self.current_playback_index < len(self.playback_targets):
-            next_point = self.playback_targets[self.current_playback_index]
-            time_diff_ms = (next_point['lastTm'] - point['lastTm']) * 1000
-            self.playback_timer.setInterval(max(50, time_diff_ms))
-        else:
-            self.playback_timer.stop()
-            self.log_message("回放完成。")
-
-    def update_playback_preview(self, lon, lat):
-        """在预览图上高亮当前发送的点"""
-        for item in self.trajectory_scene.items():
-            if isinstance(item, QGraphicsEllipseItem):
-                self.trajectory_scene.removeItem(item)
-        
-        pen = QPen(Qt.red)
-        brush = QBrush(Qt.red)
-        self.trajectory_scene.addEllipse(lon - 0.001, lat - 0.001, 0.002, 0.002, pen, brush)
 
     def log_message(self, message, tab='realtime'):
-        """Logs a message to the appropriate log display based on the tab."""
-        timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-        log_entry = f"[{timestamp}] {message}"
-        
-        log_display_widget = None
-        if tab == 'static' and hasattr(self, 'static_log_display'):
-            log_display_widget = self.static_log_display
-        elif hasattr(self, 'log_display'):
-            log_display_widget = self.log_display
+        """
+        将消息记录到指定的日志显示区域。
+        :param message: 要记录的字符串消息。
+        :param tab: 'realtime' 或 'static' 或 'playback'
+        """
+        timestamp = time.strftime("%H:%M:%S", time.localtime())
+        formatted_message = f"[{timestamp}] {message}"
 
-        if log_display_widget:
-            log_display_widget.append(log_entry)
-        
-        print(f"({tab}) {log_entry}")
+        if tab == 'static':
+            if self.static_log_display:
+                self.static_log_display.append(formatted_message)
+        elif tab == 'playback':
+            # 假设回放日志也显示在主日志区
+            if self.log_display:
+                self.log_display.append(formatted_message)
+        else: # 默认是实时
+            if self.log_display:
+                self.log_display.append(formatted_message)
 
-    def closeEvent(self, event):
-        self.kafka_producer.close()
-        if self.db:
-            self.db.close()
-        event.accept()
-
-    @pyqtSlot()
     def save_initial_target(self):
-        """将当前UI上的所有输入值保存到 initial_target.json 文件中。"""
+        """将当前UI上的目标信息保存到 initial_target.json"""
         try:
             initial_data = {}
-            for name, widget in self.inputs.items():
+            for key, widget in self.inputs.items():
                 if isinstance(widget, QLineEdit):
-                    initial_data[name] = widget.text()
+                    initial_data[key] = widget.text()
                 elif isinstance(widget, QComboBox):
-                    initial_data[name] = widget.currentText()
-            
+                    initial_data[key] = widget.currentIndex()
+
             with open('initial_target.json', 'w', encoding='utf-8') as f:
-                json.dump(initial_data, f, indent=4, ensure_ascii=False)
-            
-            self.log_message("成功: 当前输入已保存为初始目标。")
+                json.dump(initial_data, f, indent=4)
+
+            self.log_message("成功将当前设置保存为初始目标。")
         except Exception as e:
             self.log_message(f"错误: 保存初始目标失败 - {e}")
 
-    @pyqtSlot()
-    def load_initial_target(self, is_silent=False):
-        """从 initial_target.json 文件中加载值并填充到UI控件。"""
+    def load_initial_target(self):
+        """从 initial_target.json 加载并应用目标信息"""
         try:
             with open('initial_target.json', 'r', encoding='utf-8') as f:
                 initial_data = json.load(f)
-            
-            for name, value in initial_data.items():
-                widget = self.inputs.get(name)
-                if not widget:
-                    continue
-                
-                if isinstance(widget, QLineEdit):
-                    widget.setText(value)
-                elif isinstance(widget, QComboBox):
-                    index = widget.findText(value)
-                    if index != -1:
-                        widget.setCurrentIndex(index)
-            
-            if not is_silent:
-                self.log_message("成功: 已从文件加载初始目标。")
+
+            for key, value in initial_data.items():
+                widget = self.inputs.get(key)
+                if widget:
+                    if isinstance(widget, QLineEdit):
+                        widget.setText(str(value))
+                    elif isinstance(widget, QComboBox):
+                        widget.setCurrentIndex(int(value))
+
+            self.log_message("成功加载初始目标设置。")
         except FileNotFoundError:
-            if not is_silent:
-                self.log_message("信息: 未找到 'initial_target.json' 配置文件，将使用默认值。")
+            self.log_message("信息: 未找到 'initial_target.json' 文件，无法加载。")
         except Exception as e:
-            if not is_silent:
-                self.log_message(f"错误: 加载初始目标失败 - {e}")
+            self.log_message(f"错误: 加载初始目标失败 - {e}")
+
+    def closeEvent(self, event):
+        """
+        重写窗口关闭事件，以确保在退出前断开与Kafka的连接。
+        """
+        self.log_message("正在关闭应用程序...")
+        if self.kafka_producer:
+            self.kafka_producer.close()
+        if self.db:
+            self.db.close()
+
+        # 停止所有定时器
+        self.sending_timer.stop()
+        self.association_timer.stop()
+        self.simulation_timer.stop()
+        self.static_sending_timer.stop()
+        self.playback_timer.stop()
+
+        self.log_message("清理完成，再见！")
+        event.accept()

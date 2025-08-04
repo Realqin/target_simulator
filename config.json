@@ -10,14 +10,16 @@
     "port": 9030,
     "user": "root",
     "password": "",
-    "database": "ods"
+    "database": "ods",
+    "table": "ods_fusion_target_topic"
   },
   "starrocks": {
     "host": "10.100.0.14",
     "port": 9030,
     "user": "root",
     "password": "",
-    "database": "ods"
+    "database": "ods",
+    "table": "ods_original_trajectory"
   },
   "ui_options": {
     "eTargetType": {

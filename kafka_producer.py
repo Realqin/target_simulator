@@ -15,14 +15,14 @@ class KProducer:
     """
     def __init__(self, bootstrap_servers, log_callback=None):
         """
-        初始化生产者。
-        :param bootstrap_servers: Kafka集群的地址，例如 'localhost:9092'。
-        :param log_callback: 一个用于接收日志信息的回调函数。
+        初始化Kafka生产者。
+        :param bootstrap_servers: Kafka服务器地址 'host:port'。
+        :param log_callback: 用于记录消息的回调函数。
         """
         self.bootstrap_servers = bootstrap_servers
-        self.producer = None
         self.log_callback = log_callback
-        self.connect()
+        self.producer = None
+        self._log("Kafka 生产者已初始化。")
 
     def _log(self, message):
         """
