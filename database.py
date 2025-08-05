@@ -62,12 +62,12 @@ class Database:
         try:
             params = {}
             query_conditions = []
-            table_name = self.db_config.get('table', 'ods_original_trajectory') # 从配置获取表名
+            table_name = self.db_config.get('table', 'dwd_extended_trajectory') # 从配置获取表名
 
             if criteria:
                 mmsi = criteria.get('mmsi')
                 target_id = criteria.get('id')
-                province_id = criteria.get('province_id')
+                province = criteria.get('province')
 
                 # 构建MMSI和ID的组合查询
                 id_conditions = []
@@ -81,9 +81,9 @@ class Database:
                 if id_conditions:
                     query_conditions.append(f"({' OR '.join(id_conditions)})")
 
-                if province_id:
-                    query_conditions.append("adapterId = :province_id")
-                    params['province_id'] = province_id
+                if province:
+                    query_conditions.append("province = :province")
+                    params['province'] = province
             
             if start_time and end_time:
                 query_conditions.append("lastDT BETWEEN :start_time AND :end_time")

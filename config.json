@@ -11,15 +11,15 @@
     "user": "root",
     "password": "",
     "database": "ods",
-    "table": "ods_fusion_target_topic"
+    "table": "ods_original_trajectory"
   },
   "starrocks": {
     "host": "10.100.0.14",
     "port": 9030,
     "user": "root",
     "password": "",
-    "database": "ods",
-    "table": "ods_original_trajectory"
+    "database": "dwd",
+    "table": "dwd_extended_trajectory"
   },
   "ui_options": {
     "eTargetType": {

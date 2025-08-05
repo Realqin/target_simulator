@@ -92,6 +92,24 @@ class MainWindow(QWidget):
         self.playback_query_cache = {} # {row_index: {"params": {...}, "points": [...]}}
         self.data_track_dir = "data_track"
         os.makedirs(self.data_track_dir, exist_ok=True)
+        self.playback_send_inputs = {}
+        self.playback_sending_timer = QTimer(self)
+        self.playback_sending_timer.timeout.connect(self.send_playback_manual_data)
+        self.trajectory_sending_queue = []
+        self.trajectory_sending_index = 0
+        self.trajectory_sending_timer = QTimer(self)
+        self.trajectory_sending_timer.setTimerType(Qt.PreciseTimer) # 使用高精度定时器
+        self.trajectory_sending_timer.timeout.connect(self.process_trajectory_queue_v4)
+        
+        # 新增：用于在发送时更新UI的状态变量
+        self.sent_points_per_row = {}
+        self.total_points_per_row = {}
+        self.first_timestamp_per_row = {}
+        self.total_duration_per_row = {}
+
+        self.playback_override_mmsi = None
+        self.playback_lon_offset = 0.0
+        self.playback_lat_offset = 0.0
 
         # 加载外部配置
         self.config = self.load_config()
@@ -374,7 +392,7 @@ class MainWindow(QWidget):
         main_layout.addLayout(top_bar_layout)
 
         # --- 2. 查询与结果表格 ---
-        table_group = QGroupBox("查询编辑器与结果")
+        table_group = QGroupBox("目标查询")
         table_layout = QVBoxLayout()
 
         self.playback_table = QTableWidget()
@@ -403,48 +421,99 @@ class MainWindow(QWidget):
 
         # 添加/删除行按钮
         row_control_layout = QHBoxLayout()
+        self.show_timestamp_checkbox = QCheckBox("显示时间点")
+        self.show_timestamp_checkbox.stateChanged.connect(self.draw_trajectories)
         add_row_btn = QPushButton("添加查询行")
         add_row_btn.clicked.connect(self.add_playback_query_row)
         remove_row_btn = QPushButton("删除选中行")
         remove_row_btn.clicked.connect(self.remove_selected_playback_row)
-        # view_cache_btn = QPushButton("查看缓存数据")
-        # view_cache_btn.clicked.connect(self.show_cached_data)
+        save_as_btn = QPushButton("保存")
+        save_as_btn.clicked.connect(self.handle_save_as_button)
+
         row_control_layout.addStretch()
+        # 1. “显示时间勾选框”在“添加查询行”前
+        row_control_layout.addWidget(self.show_timestamp_checkbox)
         row_control_layout.addWidget(add_row_btn)
+        # 2. “保存”在“删除选中行”后
         row_control_layout.addWidget(remove_row_btn)
-        #row_control_layout.addWidget(view_cache_btn)
+        row_control_layout.addWidget(save_as_btn)
         table_layout.addLayout(row_control_layout)
 
         table_group.setLayout(table_layout)
         main_layout.addWidget(table_group)
 
         # --- 3. 底部预览与发送 ---
-        bottom_group = QGroupBox("轨迹预览与发送")
         bottom_layout = QHBoxLayout()
 
+        # 3.1 左侧预览
+        preview_group = QGroupBox("轨迹预览")
+        preview_layout = QVBoxLayout()
         self.trajectory_scene = QGraphicsScene()
         self.trajectory_preview = ZoomableView(self.trajectory_scene)
-        # 修复：缩放时不重置视图
         self.trajectory_preview.zoomed.connect(lambda: self.draw_trajectories(fit_view=False))
-        bottom_layout.addWidget(self.trajectory_preview, stretch=4)
+        preview_layout.addWidget(self.trajectory_preview)
+        preview_group.setLayout(preview_layout)
+        bottom_layout.addWidget(preview_group, stretch=4)
 
-        send_control_layout = QVBoxLayout()
-        self.show_timestamp_checkbox = QCheckBox("显示时间点")
-        self.show_timestamp_checkbox.stateChanged.connect(self.draw_trajectories)
+        # 3.2 右侧发送控制 (包装成一个模块)
+        sending_group = QGroupBox("轨迹发送")
+        sending_layout = QGridLayout()
 
-        save_as_btn = QPushButton("保存")
-        save_as_btn.clicked.connect(self.handle_save_as_button)
-        send_btn = QPushButton("开始发送")
-        send_btn.clicked.connect(self.start_playback)
 
-        send_control_layout.addWidget(self.show_timestamp_checkbox)
-        send_control_layout.addWidget(save_as_btn)
-        send_control_layout.addWidget(send_btn)
-        send_control_layout.addStretch()
-        bottom_layout.addLayout(send_control_layout, stretch=1)
+        self.playback_send_inputs = {
+            "mmsi": QLineEdit(),
+            "bds": QLineEdit(),
+            "longitude": QLineEdit(),
+            "latitude": QLineEdit()
+        }
 
-        bottom_group.setLayout(bottom_layout)
-        main_layout.addWidget(bottom_group)
+        # MMSI
+        sending_layout.addWidget(QLabel("MMSI:"), 1, 0, Qt.AlignRight)
+        mmsi_layout = QHBoxLayout()
+        mmsi_layout.addWidget(self.playback_send_inputs["mmsi"])
+        random_mmsi_btn = QPushButton("随机")
+        playback_logger = lambda msg: self.log_message(msg, "playback")
+        random_mmsi_btn.clicked.connect(lambda: self._generate_random_value("mmsi", "MMSI", self.playback_send_inputs, playback_logger))
+        mmsi_layout.addWidget(random_mmsi_btn)
+        sending_layout.addLayout(mmsi_layout, 1, 1)
+
+        # BDS
+        sending_layout.addWidget(QLabel("北斗号:"), 2, 0, Qt.AlignRight)
+        bds_layout = QHBoxLayout()
+        bds_layout.addWidget(self.playback_send_inputs["bds"])
+        random_bds_btn = QPushButton("随机")
+        random_bds_btn.clicked.connect(lambda: self._generate_random_value("bds", "BDS", self.playback_send_inputs, playback_logger))
+        bds_layout.addWidget(random_bds_btn)
+        sending_layout.addLayout(bds_layout, 2, 1)
+
+        # Longitude
+        sending_layout.addWidget(QLabel("经度:"), 3, 0, Qt.AlignRight)
+        sending_layout.addWidget(self.playback_send_inputs["longitude"], 3, 1)
+
+        # Latitude
+        sending_layout.addWidget(QLabel("纬度:"), 4, 0, Qt.AlignRight)
+        sending_layout.addWidget(self.playback_send_inputs["latitude"], 4, 1)
+
+        # Buttons
+        self.playback_start_send_btn = QPushButton("发送勾选轨迹")
+        self.playback_stop_send_btn = QPushButton("终止发送")
+        self.playback_start_send_btn.clicked.connect(self.send_selected_trajectories_v4)
+        self.playback_stop_send_btn.clicked.connect(self.handle_playback_stop_sending_v4)
+
+        button_layout = QHBoxLayout()
+        button_layout.addWidget(self.playback_start_send_btn)
+        button_layout.addWidget(self.playback_stop_send_btn)
+        sending_layout.addLayout(button_layout, 5, 0, 1, 2)
+
+        sending_group.setLayout(sending_layout)
+        
+        right_panel_layout = QVBoxLayout()
+        right_panel_layout.addWidget(sending_group)
+        right_panel_layout.addStretch()
+
+        bottom_layout.addLayout(right_panel_layout, stretch=1)
+
+        main_layout.addLayout(bottom_layout)
 
         # --- 初始化 ---
         self.populate_saved_tracks_dropdown()
@@ -899,6 +968,29 @@ class MainWindow(QWidget):
             logger(f"错误: 在配置文件中未找到 '{field_key}' 的随机生成规则。")
         except Exception as e:
             logger(f"生成随机{field_name_for_log}时出错: {e}")
+
+    def _generate_random_id_internal(self, logger):
+        """
+        Generates a random ID based on config rules for internal use.
+        """
+        try:
+            config = self.config['random_generation']['id']
+            prefix = config.get('prefix', '')
+            length = config.get('length', 20)
+
+            if length <= len(prefix):
+                logger(f"错误: ID 配置的总长度({length})必须大于前缀'{prefix}'的长度。将使用备用方法生成ID。")
+                return int(str(time.time_ns())[-9:])
+
+            random_len = length - len(prefix)
+            random_part = ''.join([str(random.randint(0, 9)) for _ in range(random_len)])
+            new_value = prefix + random_part
+            
+            return int(new_value)
+
+        except (KeyError, TypeError, ValueError) as e:
+            logger(f"错误: 在配置文件中未找到 'id' 的随机生成规则或规则无效: {e}。将使用备用方法生成ID。")
+            return int(str(time.time_ns())[-9:])
 
     def update_course_from_button(self, angle, inputs_dict):
         inputs_dict["course"].setText(str(angle))
@@ -1650,6 +1742,97 @@ class MainWindow(QWidget):
     # 回放模块 - 逻辑 (重构后)
     # ===================================================================
 
+    def start_playback(self):
+        """开始回放选中的轨迹"""
+        self.playback_targets = []
+        for row in range(self.playback_table.rowCount()):
+            item = self.playback_table.item(row, 0)
+            if item and item.checkState() == Qt.Checked:
+                cached_data = self.playback_query_cache.get(row)
+                if cached_data and cached_data.get("points"):
+                    self.playback_targets.extend(cached_data["points"])
+
+        if not self.playback_targets:
+            self.log_message("没有选择任何有效的轨迹进行回放。", "playback")
+            return
+
+        # 按时间戳排序
+        self.playback_targets.sort(key=lambda p: p.get('lastTm', 0))
+
+        self.current_playback_index = 0
+        self.log_message(f"准备回放 {len(self.playback_targets)} 个轨迹点。", "playback")
+
+        # 弹出对话框获取发送间隔
+        interval, ok = QInputDialog.getDouble(self, "设置回放频率", "请输入每个点之间的时间间隔（秒）:", 1.0, 0.1, 3600, 2)
+
+        if ok and interval > 0:
+            self.playback_timer.start(int(interval * 1000))
+            self.log_message(f"回放已开始，频率: {interval} 秒/点。", "playback")
+        else:
+            self.log_message("回放已取消。", "playback")
+
+    def send_playback_data(self):
+        """定时器调用的函数，用于发送单个回放数据点。"""
+        if self.current_playback_index >= len(self.playback_targets):
+            self.playback_timer.stop()
+            self.log_message("回放完成。", "playback")
+            return
+
+        point = self.playback_targets[self.current_playback_index]
+
+        try:
+            target_list = target_pb2.TargetProtoList()
+            target = target_list.list.add()
+
+            target.id = int(point.get('id', 0))
+            target.lastTm = int(point.get('lastTm', int(time.time() * 1000)))
+            target.sost = int(point.get('sost', 1))
+            eTargetType_val = 0
+            if 'eTargetType_mapping' in self.config['ui_options']:
+                for rule in self.config['ui_options']['eTargetType_mapping']:
+                    if rule['ui_class'] == point.get('eTargetType') and rule['ui_state'] == point.get('state'):
+                        eTargetType_val = rule['eTargetType']
+                        break
+            target.s_class = eTargetType_val
+            target.adapterId = int(point.get('adapterId', 0))
+            target.status = 2
+
+            pos_info = target.pos
+            pos_info.id = target.id
+            pos_info.mmsi = int(point.get('mmsi', 0))
+            pos_info.vesselName = point.get('vesselName', '')
+            pos_info.speed = float(point.get('speed', 0.0))
+            pos_info.course = float(point.get('course', 0.0))
+            pos_info.len = int(point.get('len', 0))
+            pos_info.shiptype = int(point.get('shiptype', 99))
+            pos_info.geoPtn.longitude = float(point.get('longitude', 0.0))
+            pos_info.geoPtn.latitude = float(point.get('latitude', 0.0))
+            target.maxLen = pos_info.len
+            pos_info.displayId = int(target.id) % 100000
+            pos_info.state = target.sost
+            pos_info.quality = 100
+            pos_info.period = 10
+            pos_info.heading = pos_info.course
+            pos_info.s_class = target.eTargetType
+            pos_info.m_mmsi = pos_info.mmsi
+            pos_info.aidtype = 1
+            if hasattr(pos_info, 'adapterId'):
+                pos_info.adapterId = target.adapterId
+
+            self.log_message(f"回放点 {self.current_playback_index + 1}/{len(self.playback_targets)}: ID={target.id}, Lon={pos_info.geoPtn.longitude:.6f}, Lat={pos_info.geoPtn.latitude:.6f}", "playback")
+            pb_data = target_list.SerializeToString()
+            topic = self.config['kafka']['topic']
+            self.kafka_producer.send_message(topic, pb_data)
+
+            self.current_playback_index += 1
+
+        except Exception as e:
+            self.log_message(f"错误: 发送回放数��点时失败: {e}", "playback")
+            self.playback_timer.stop()
+            self.log_message("因错误导致回放终止。", "playback")
+
+    
+
     def populate_saved_tracks_dropdown(self):
         """加载/更新“选择已有记录”下拉框"""
         self.saved_tracks_combo.blockSignals(True)
@@ -1780,19 +1963,931 @@ class MainWindow(QWidget):
 
         # 8. 轨迹时长
         duration_str = "0.0"
-        if point_count > 1:
-            try:
-                lasttms = [p.get('lastTm', 0) for p in points]
-                #print(lasttms, "lasttms")
-                time_diff_ms = max(lasttms) - min(lasttms)
-                time_diff_min = round((time_diff_ms / 1000) / 60, 1)
-                duration_str = str(time_diff_min)
-            except (ValueError, TypeError):
-                duration_str = "Error" # Handle potential errors in data
+
+    def send_selected_trajectories_v4(self):
+        """
+        核心功能：准备并启动按原始时间间隔发送轨迹的流程。(V4)
+        - 修正多目标ID问题
+        - 修正时长单位为分钟
+        - 终止时清空状态
+        """
+        logger = lambda msg: self.log_message(msg, "playback")
+
+        if self.trajectory_sending_timer.isActive():
+            self.handle_playback_stop_sending_v4(completed=False)
+            logger("已停止之前的发送任务，准备启动新任务...")
+            QApplication.processEvents()
+            time.sleep(0.1)
+
+        # 1. 清理并初始化状态
+        self.sent_points_per_row.clear()
+        self.total_points_per_row.clear()
+        self.first_timestamp_per_row.clear()
+        self.total_duration_per_row.clear()
+
+        # 2. 获取UI输入
+        base_lon_str = self.playback_send_inputs['longitude'].text().strip()
+        base_lat_str = self.playback_send_inputs['latitude'].text().strip()
+        override_mmsi_str = self.playback_send_inputs['mmsi'].text().strip()
+        override_bds_str = self.playback_send_inputs['bds'].text().strip()
+        use_offset = bool(base_lon_str and base_lat_str)
+        lon_offset, lat_offset = 0.0, 0.0
+
+        # 3. 收集选中的轨迹并初始化UI
+        all_points = []
+        selected_trajectories_data = []
         
-        duration_item = QTableWidgetItem(duration_str)
-        duration_item.setFlags(duration_item.flags() & ~Qt.ItemIsEditable) # 时长不可编辑
-        self.playback_table.setItem(row, 7, duration_item)
+        rows_to_send = []
+        for row in range(self.playback_table.rowCount()):
+            item = self.playback_table.item(row, 0)
+            if item and item.checkState() == Qt.Checked:
+                rows_to_send.append(row)
+
+        if not rows_to_send:
+            logger("没有选择任何有效的轨迹进行发送。")
+            QMessageBox.information(self, "提示", "没有选择任何有效的轨迹进行发送。")
+            return
+
+        for row in rows_to_send:
+            cached_data = self.playback_query_cache.get(row)
+            if cached_data and cached_data.get("points"):
+                points = cached_data["points"]
+                if not points: continue
+                all_points.extend(points)
+                selected_trajectories_data.append({'row': row, 'points': points})
+                
+                self.total_points_per_row[row] = len(points)
+                self.sent_points_per_row[row] = 0
+                first_ts = int(points[0].get('lastTm', 0))
+                last_ts = int(points[-1].get('lastTm', 0))
+                self.first_timestamp_per_row[row] = first_ts
+                # --- FIX 3: Calculate duration in minutes ---
+                self.total_duration_per_row[row] = (last_ts - first_ts) / 60000.0
+                
+                self.playback_table.setItem(row, 6, QTableWidgetItem(f"0/{self.total_points_per_row[row]}"))
+                self.playback_table.setItem(row, 7, QTableWidgetItem(f"0.00/{self.total_duration_per_row[row]:.2f}"))
+
+        if not selected_trajectories_data:
+            logger("选择的轨迹中没有有效的轨迹点数据。")
+            return
+
+        # 4. 计算偏移和时间基准
+        try:
+            first_trajectory_for_location = selected_trajectories_data[0]['points']
+            location_base_point = first_trajectory_for_location[0]
+            
+            if use_offset:
+                ui_base_lon, ui_base_lat = float(base_lon_str), float(base_lat_str)
+                db_base_lon = float(location_base_point.get('longitude', 0.0))
+                db_base_lat = float(location_base_point.get('latitude', 0.0))
+                lon_offset, lat_offset = ui_base_lon - db_base_lon, ui_base_lat - db_base_lat
+                logger(f"坐标基准: UI({ui_base_lon}, {ui_base_lat}), DB({db_base_lon}, {db_base_lat})")
+            else:
+                logger("信息: 未提供基准经纬度，将使用原始坐标。")
+
+            all_points.sort(key=lambda p: int(p.get('lastTm', 0)))
+            time_base_point = all_points[0]
+            first_db_timestamp = int(time_base_point.get('lastTm'))
+
+        except (IndexError, ValueError, TypeError) as e:
+            logger(f"错误：无法确定计算基准: {e}")
+            return
+
+        # 5. 准备发送队列
+        self.trajectory_sending_queue = []
+        start_send_time = int(time.time() * 1000)
+        mmsi_counter, bds_counter = 0, 0
+        
+        ais_traj_ids = {id(traj['points']) for traj in selected_trajectories_data if any(p.get('mmsi') for p in traj['points'])}
+        bds_traj_ids = {id(traj['points']) for traj in selected_trajectories_data if any(p.get('bds') for p in traj['points'])}
+
+        for trajectory_item in selected_trajectories_data:
+            row = trajectory_item['row']
+            trajectory = trajectory_item['points']
+            # --- FIX 1: Generate a truly unique ID for each trajectory ---
+            target_random_id = self._generate_random_id_internal(logger)
+            
+            current_override_mmsi = 0
+            if override_mmsi_str and id(trajectory) in ais_traj_ids:
+                current_override_mmsi = int(override_mmsi_str) + mmsi_counter
+                mmsi_counter += 1
+
+            current_override_bds = 0
+            if override_bds_str and id(trajectory) in bds_traj_ids:
+                current_override_bds = int(override_bds_str) + bds_counter
+                bds_counter += 1
+
+            for point in trajectory:
+                try:
+                    # --- FIX: 完整地填充Protobuf对象 (增加None值健壮性) ---
+                    target = target_pb2.TargetProto()
+                    target.id = target_random_id
+                    target.eTargetType = point.get('targetType') or 'TT_R'
+
+                    original_timestamp = int(point.get('lastTm') or 0)
+                    if not original_timestamp:
+                        logger(f"警告: 轨迹点 (ID: {point.get('id')}) 缺少有效时间戳，已跳过。")
+                        continue
+                        
+                    time_delta = original_timestamp - first_db_timestamp
+                    target.lastTm = start_send_time + time_delta
+
+                    #当前时间：target.lastTm
+                    #差值=开始发送的时间-第一个点的时间。用于后面的信息源里时间+差值
+                    dif = start_send_time-first_db_timestamp
+
+
+                    target.maxLen = int(point.get('maxLen') or 0)
+
+                    # 获取 adapterId 字符串
+                    adapter_id_str = point.get('province')
+                    adapter_id = 0  # 默认值
+                    if self.config['ui_options'].get('province'):
+                        for province_item in self.config['ui_options']['province']:
+                            if province_item['name_en'] == adapter_id_str:
+                                adapter_id = province_item['adapterId']
+                                break
+                    target.adapterId = int(adapter_id)
+                    target.eTargetType =  point.get('targetType')
+                    target.sost = int(point.get('state') or 14)
+
+                    # eTargetType_val = 0
+                    # if 'eTargetType_mapping' in self.config['ui_options']:
+                    #     for rule in self.config['ui_options']['eTargetType_mapping']:
+                    #         if rule['ui_class'] == point.get('eTargetType') and rule['ui_state'] == point.get('state'):
+                    #             eTargetType_val = rule['eTargetType']
+                    #             break
+                    # target.s_class = eTargetType_val
+
+                    target.status = point.get('status') or  ''
+
+                    pos_info = target.pos
+                    pos_info.id = target.id
+                    pos_info.mmsi = current_override_mmsi if current_override_mmsi > 0 else int(point.get('mmsi') or 0)
+                    pos_info.imo = current_override_bds if current_override_bds > 0 else int(point.get('bds') or 0)
+                    pos_info.vesselName = point.get('vesselName') or ''
+                    pos_info.speed = float(point.get('speed') or 0.0)
+                    pos_info.state = int(point.get('state') or 14)
+                    pos_info.course = float(point.get('course') or 0.0)
+                    pos_info.len = int(point.get('len') or 0)
+                    pos_info.id_r = int(point.get('idR') or 0)
+
+
+                    pos_info.shiptype = int(point.get('shipType') or 99)
+
+                    original_lon = float(point.get('longitude') or 0.0)
+                    original_lat = float(point.get('latitude') or 0.0)
+                    pos_info.geoPtn.longitude = original_lon + lon_offset
+                    pos_info.geoPtn.latitude = original_lat + lat_offset
+
+                    pos_info.displayId = int(target.id) % 100000
+                    pos_info.state = int(point.get('state') or 1)
+                    pos_info.quality = 100
+                    pos_info.heading = float(point.get('heading') or 0.0)
+                    s_class = point.get('sClass', '')
+                    pos_info.s_class = self.config['ui_options']['eTargetType'].get(s_class, 0)
+
+
+
+                    pos_info.m_mmsi = pos_info.mmsi
+                    pos_info.aidtype = int(point.get('aidType') or 0)
+                    if hasattr(pos_info, 'adapterId'):
+                        pos_info.adapterId = target.adapterId
+
+                    # 新增：解析和填充 sources 和 fusionTargets
+                    sources_json = point.get('sources')
+                    if sources_json:
+                        try:
+                            sources_data = json.loads(sources_json)
+                            for src_item in sources_data:
+                                source_pb = target.sources.add()
+                                source_pb.provider = src_item.get("provider", "")
+                                source_pb.type = src_item.get("type", "")
+                                if "ids" in src_item and isinstance(src_item["ids"], list):
+                                    for an_id in src_item["ids"]:
+                                        source_pb.ids.append(str(an_id))
+                        except json.JSONDecodeError:
+                            logger(f"警告: 解析sources字段失败 (ID: {target.id}): {sources_json}")
+
+                    fusion_targets_json = point.get('fusionTargets')
+                    if fusion_targets_json:
+                        try:
+                            fusion_targets_data = json.loads(fusion_targets_json)
+                            for ft_item in fusion_targets_data:
+                                ft_pb = target.vecFusionedTargetInfo.add()
+                                ft_pb.ullUniqueId = int(ft_item.get("targetId") or 0)
+                                ft_pb.uiStationId = int(ft_item.get("stationId") or 0)
+                                # 假设 stationType 是字符串，需要映射到枚举或整数
+                                station_type_str = ft_item.get("stationType", "").upper()
+                                if station_type_str == "RADAR":
+                                    ft_pb.uiStationType = 82  # 假设 82 代表 RADAR
+                                elif station_type_str == "AIS":
+                                    ft_pb.uiStationType = 65  # 假设 65 代表 AIS
+                                else:
+                                    ft_pb.uiStationType = 0 # 未知类型
+                                    # dif_time = start_send_time - first_db_timestamp
+                                    # print(dif_time,dif_time)
+                                ft_pb.ullPosUpdateTime = int(ft_item.get("updateTime") or 0) + int(dif)
+                                #print(ft_pb.ullPosUpdateTime)
+                        except json.JSONDecodeError:
+                            logger(f"警告: 解析fusionTargets字段失败 (ID: {target.id}): {fusion_targets_json}")
+
+
+                    self.trajectory_sending_queue.append({'proto': target, 'timestamp': target.lastTm, 'row': row,
+                                                          'original_timestamp': original_timestamp})
+
+                except Exception as e:
+                    logger(f"错误: 准备点 {point.get('id')} 时失\\u5931: {e}")
+
+        # 6. 启动发送
+        if not self.trajectory_sending_queue:
+            logger("错误: 准备发送队列失败，队列为空。")
+            return
+            
+        self.trajectory_sending_queue.sort(key=lambda item: item['timestamp'])
+        self.trajectory_sending_index = 0
+        logger(f"准备发送 {len(self.trajectory_sending_queue)} 个轨迹点。")
+        self.playback_start_send_btn.setEnabled(False)
+        self.playback_stop_send_btn.setEnabled(True)
+        self.process_trajectory_queue_v4()
+
+    def process_trajectory_queue_v4(self):
+        """
+        处理并发送队列中的下一个轨迹点，并设置定时器以发送再下一个。(V4)
+        """
+        if self.trajectory_sending_index >= len(self.trajectory_sending_queue):
+            self.handle_playback_stop_sending_v4(completed=True)
+            return
+
+        current_item = self.trajectory_sending_queue[self.trajectory_sending_index]
+        row = current_item['row']
+        
+        target_list = target_pb2.TargetProtoList()
+        target_list.list.add().CopyFrom(current_item['proto'])
+        pb_data = target_list.SerializeToString()
+        topic = self.config['kafka']['topic']
+        self.kafka_producer.send_message(topic, pb_data)
+        
+        self.log_message(f"发送数据 (Row {row}):\n{target_list}", "playback")
+
+        self.sent_points_per_row[row] += 1
+        self.playback_table.item(row, 6).setText(f"{self.sent_points_per_row[row]}/{self.total_points_per_row[row]}")
+
+        # --- FIX 3: Calculate and display elapsed time in minutes ---
+        elapsed_minutes = ((current_item['original_timestamp'] - self.first_timestamp_per_row[row]) / 1000.0) / 60.0
+        self.playback_table.item(row, 7).setText(f"{elapsed_minutes:.2f}/{self.total_duration_per_row[row]:.2f}")
+        
+        self.trajectory_sending_index += 1
+
+        if self.trajectory_sending_index < len(self.trajectory_sending_queue):
+            next_item = self.trajectory_sending_queue[self.trajectory_sending_index]
+            delay = next_item['timestamp'] - current_item['timestamp']
+            if delay < 0: delay = 0
+            self.trajectory_sending_timer.start(delay)
+        else:
+            self.handle_playback_stop_sending_v4(completed=True)
+
+    def handle_playback_stop_sending_v4(self, completed=False):
+        """处理回放Tab下“轨迹发送”模块的终止发送按钮 (V4)"""
+        logger = lambda msg: self.log_message(msg, 'playback')
+        if self.trajectory_sending_timer.isActive():
+            self.trajectory_sending_timer.stop()
+        
+        # --- FIX 2: Reset UI state on stop ---
+        for row, total_points in self.total_points_per_row.items():
+            if self.playback_table.rowCount() > row:
+                self.playback_table.setItem(row, 6, QTableWidgetItem(str(total_points)))
+                self.playback_table.setItem(row, 7, QTableWidgetItem(f"{self.total_duration_per_row[row]:.2f}"))
+
+        self.trajectory_sending_queue = []
+        self.trajectory_sending_index = 0
+        self.sent_points_per_row.clear()
+        self.total_points_per_row.clear()
+        self.first_timestamp_per_row.clear()
+        self.total_duration_per_row.clear()
+        
+        self.playback_start_send_btn.setEnabled(True)
+        self.playback_stop_send_btn.setEnabled(False)
+        
+        if completed:
+            logger("所有轨迹点发送完成。")
+        else:
+            logger("轨迹发送已手动终止。")
+
+    def send_playback_manual_data(self):
+        """定时器调用，发送“轨迹发送”模块中手动输入的数据"""
+        logger = lambda msg: self.log_message(msg, 'playback')
+        try:
+            target_list = target_pb2.TargetProtoList()
+            target = target_list.list.add()
+
+            mmsi_str = self.playback_send_inputs['mmsi'].text().strip()
+            lon_str = self.playback_send_inputs['longitude'].text().strip()
+            lat_str = self.playback_send_inputs['latitude'].text().strip()
+
+            if not lon_str or not lat_str:
+                logger("错误: 经度和纬度是必填项。")
+                self.playback_sending_timer.stop()
+                return
+
+            target.id = int(time.time() * 10)
+            target.lastTm = int(time.time() * 1000)
+            target.sost = 1
+            target.eTargetType = 14
+            target.status = 2
+
+            pos_info = target.pos
+            pos_info.id = target.id
+            pos_info.mmsi = int(mmsi_str) if mmsi_str else 0
+            pos_info.geoPtn.longitude = float(lon_str)
+            pos_info.geoPtn.latitude = float(lat_str)
+            pos_info.speed = 5.0
+            pos_info.course = 90.0
+            pos_info.len = 50
+            pos_info.shiptype = 99
+            pos_info.heading = pos_info.course
+            pos_info.state = target.sost
+            pos_info.quality = 100
+            pos_info.period = 10
+            pos_info.s_class = target.eTargetType
+            pos_info.m_mmsi = pos_info.mmsi
+            pos_info.aidtype = 1
+
+            logger(f"手动发送轨迹: ID={target.id}, MMSI={pos_info.mmsi}, Lon={pos_info.geoPtn.longitude:.6f}, Lat={pos_info.geoPtn.latitude:.6f}")
+            pb_data = target_list.SerializeToString()
+            topic = self.config['kafka']['topic']
+            self.kafka_producer.send_message(topic, pb_data)
+
+        except Exception as e:
+            logger(f"错误: 手动发送轨迹数据时失败: {e}")
+            self.playback_sending_timer.stop()
+
+    # def send_selected_trajectories_v3(self):
+    #     """
+    #     核心功能：准备并启动按原始时间间隔发送轨迹的流程。(V3)
+    #     - 增加发送日志打印
+    #     - 实时更新发送点数和时长
+    #     """
+    #     logger = lambda msg: self.log_message(msg, "playback")
+    #
+    #     if self.trajectory_sending_timer.isActive():
+    #         self.handle_playback_stop_sending_v2(completed=False) # 使用旧的v2停止函数
+    #         logger("已停止之前的发送任务，准备启动新任务...")
+    #         QApplication.processEvents()
+    #         time.sleep(0.1)
+    #
+    #     # 1. 清理并初始化状态
+    #     self.sent_points_per_row.clear()
+    #     self.total_points_per_row.clear()
+    #     self.first_timestamp_per_row.clear()
+    #     self.total_duration_per_row.clear()
+    #
+    #     # 2. 获取UI输入
+    #     base_lon_str = self.playback_send_inputs['longitude'].text().strip()
+    #     base_lat_str = self.playback_send_inputs['latitude'].text().strip()
+    #     override_mmsi_str = self.playback_send_inputs['mmsi'].text().strip()
+    #     override_bds_str = self.playback_send_inputs['bds'].text().strip()
+    #     use_offset = bool(base_lon_str and base_lat_str)
+    #     lon_offset, lat_offset = 0.0, 0.0
+    #
+    #     # 3. 收集选中的轨迹并初始化UI
+    #     all_points = []
+    #     selected_trajectories_data = []
+    #
+    #     rows_to_send = []
+    #     for row in range(self.playback_table.rowCount()):
+    #         item = self.playback_table.item(row, 0)
+    #         if item and item.checkState() == Qt.Checked:
+    #             rows_to_send.append(row)
+    #
+    #     print(rows_to_send,"rows_to_send")
+    #
+    #
+    #     if not rows_to_send:
+    #         logger("没有选择任何有效的轨迹进行发送。")
+    #         QMessageBox.information(self, "提示", "没有选择任何有效的轨迹进行发送。")
+    #         return
+    #
+    #     for row in rows_to_send:
+    #         cached_data = self.playback_query_cache.get(row)
+    #         if cached_data and cached_data.get("points"):
+    #             points = cached_data["points"]
+    #             all_points.extend(points)
+    #             selected_trajectories_data.append({'row': row, 'points': points})
+    #
+    #             # 初始化状态字典
+    #             self.total_points_per_row[row] = len(points)
+    #             self.sent_points_per_row[row] = 0
+    #             first_ts = int(points[0].get('lastTm', 0))
+    #             last_ts = int(points[-1].get('lastTm', 0))
+    #             self.first_timestamp_per_row[row] = first_ts
+    #             self.total_duration_per_row[row] = (last_ts - first_ts) / 1000.0
+    #
+    #             # 更新UI
+    #             self.playback_table.setItem(row, 6, QTableWidgetItem(f"0/{self.total_points_per_row[row]}"))
+    #             self.playback_table.setItem(row, 7, QTableWidgetItem(f"0.0/{self.total_duration_per_row[row]:.1f}"))
+    #
+    #     # 4. 计算偏移和时间基准
+    #     try:
+    #         first_trajectory_for_location = selected_trajectories_data[0]['points']
+    #         location_base_point = first_trajectory_for_location[0]
+    #
+    #         if use_offset:
+    #             ui_base_lon, ui_base_lat = float(base_lon_str), float(base_lat_str)
+    #             db_base_lon = float(location_base_point.get('longitude', 0.0))
+    #             db_base_lat = float(location_base_point.get('latitude', 0.0))
+    #             lon_offset, lat_offset = ui_base_lon - db_base_lon, ui_base_lat - db_base_lat
+    #             logger(f"坐标基准: UI({ui_base_lon}, {ui_base_lat}), DB({db_base_lon}, {db_base_lat})")
+    #         else:
+    #             logger("信息: 未提供基准经纬度，将使用原始坐标。")
+    #
+    #         all_points.sort(key=lambda p: int(p.get('lastTm', 0)))
+    #         print(all_points,"all_points")
+    #
+    #         time_base_point = all_points[0]
+    #         first_db_timestamp = int(time_base_point.get('lastTm'))
+    #         print(first_db_timestamp,"first_db_timestamp")
+    #
+    #     except (IndexError, ValueError, TypeError) as e:
+    #         logger(f"错误：无法确定计算基准: {e}")
+    #         return
+    #
+    #     # 5. 准备发送队列
+    #     self.trajectory_sending_queue = []
+    #     start_send_time = int(time.time() * 1000)
+    #     mmsi_counter, bds_counter = 0, 0
+    #
+    #     ais_traj_ids = {id(traj['points']) for traj in selected_trajectories_data if any(p.get('mmsi') for p in traj['points'])}
+    #     bds_traj_ids = {id(traj['points']) for traj in selected_trajectories_data if any(p.get('bds') for p in traj['points'])}
+    #
+    #     for trajectory_item in selected_trajectories_data:
+    #         row = trajectory_item['row']
+    #         trajectory = trajectory_item['points']
+    #         target_random_id = int(str(time.time_ns())[-9:])
+    #
+    #         current_override_mmsi = 0
+    #         if override_mmsi_str and id(trajectory) in ais_traj_ids:
+    #             current_override_mmsi = int(override_mmsi_str) + mmsi_counter
+    #             mmsi_counter += 1
+    #
+    #         current_override_bds = 0
+    #         if override_bds_str and id(trajectory) in bds_traj_ids:
+    #             current_override_bds = int(override_bds_str) + bds_counter
+    #             bds_counter += 1
+    #
+    #         for point in trajectory:
+    #             try:
+    #                 # --- FIX: 完整地填充Protobuf对象 ---
+    #                 target = target_pb2.TargetProto()
+    #                 target.id = target_random_id
+    #
+    #                 original_timestamp = int(point.get('lastTm'))
+    #                 time_delta = original_timestamp - first_db_timestamp
+    #                 target.lastTm = start_send_time + time_delta
+    #
+    #                 #target.sost = int(point.get('sost', 1))
+    #                 target.state = int(point.get('state', 14))
+    #                 target.adapterId = int(point.get('adapterId', 0))
+    #                 #target.status = 2
+    #                 target.status = point.get('status', 0)
+    #
+    #                 pos_info = target.pos
+    #                 pos_info.id = target.id
+    #                 pos_info.mmsi = current_override_mmsi if current_override_mmsi > 0 else int(point.get('mmsi', 0))
+    #                 pos_info.imo = current_override_bds if current_override_bds > 0 else int(point.get('bds', 0))
+    #                 pos_info.vesselName = point.get('vesselName', '')
+    #                 pos_info.speed = float(point.get('speed', 0.0))
+    #                 pos_info.course = float(point.get('course', 0.0))
+    #                 pos_info.len = int(point.get('len', 0))
+    #                 pos_info.maxLen = int(point.get('maxLen', 0))
+    #                 pos_info.shiptype = int(point.get('shipType', 99))
+    #                 #target.maxLen = pos_info.len
+    #
+    #                 original_lon = float(point.get('longitude', 0.0))
+    #                 original_lat = float(point.get('latitude', 0.0))
+    #                 pos_info.geoPtn.longitude = original_lon + lon_offset
+    #                 pos_info.geoPtn.latitude = original_lat + lat_offset
+    #
+    #                 pos_info.displayId = int(target.id) % 100000
+    #                 pos_info.state = int(point.get('state', 1))
+    #                 pos_info.quality = 100
+    #                 #pos_info.period = 10
+    #                 pos_info.heading = float(point.get('heading', 0.0))
+    #                 pos_info.s_class = int(point.get('sClass', 0))
+    #                 pos_info.m_mmsi = pos_info.mmsi
+    #                 pos_info.aidtype = point.get('aidType', 0)
+    #                 if hasattr(pos_info, 'adapterId'):
+    #                     pos_info.adapterId = target.adapterId
+    #
+    #                 # 新增：解析和填充 sources 和 fusionTargets
+    #                 sources_json = point.get('sources')
+    #                 if sources_json:
+    #                     try:
+    #                         sources_data = json.loads(sources_json)
+    #                         for src_item in sources_data:
+    #                             source_pb = target.sources.add()
+    #                             source_pb.provider = src_item.get("provider", "")
+    #                             source_pb.type = src_item.get("type", "")
+    #                             if "ids" in src_item and isinstance(src_item["ids"], list):
+    #                                 for an_id in src_item["ids"]:
+    #                                     source_pb.ids.append(str(an_id))
+    #                     except json.JSONDecodeError:
+    #                         logger(f"警告: 解析sources字段失败 (ID: {target.id}): {sources_json}")
+    #
+    #                 print(sources_data,"sources_data")
+    #
+    #                 fusion_targets_json = point.get('fusionTargets')
+    #                 if fusion_targets_json:
+    #                     try:
+    #                         fusion_targets_data = json.loads(fusion_targets_json)
+    #                         for ft_item in fusion_targets_data:
+    #                             ft_pb = target.vecFusionedTargetInfo.add()
+    #                             ft_pb.ullUniqueId = ft_item.get("targetId", 0)
+    #                             ft_pb.uiStationId = ft_item.get("stationId", 0)
+    #                             # 假设 stationType 是字符串，需要映射到枚举或整数
+    #                             station_type_str = ft_item.get("stationType", "").upper()
+    #                             if station_type_str == "RADAR":
+    #                                 ft_pb.uiStationType = 82  # 假设 82 代表 RADAR
+    #                             elif station_type_str == "AIS":
+    #                                 ft_pb.uiStationType = 65  # 假设 65 代表 AIS
+    #                             else:
+    #                                 ft_pb.uiStationType = 0 # 未知类型
+    #                             ft_pb.ullPosUpdateTime = ft_item.get("updateTime", 0)
+    #                     except json.JSONDecodeError:
+    #                         logger(f"警告: 解析fusionTargets字段失败 (ID: {target.id}): {fusion_targets_json}")
+    #
+    #
+    #                 self.trajectory_sending_queue.append({'proto': target, 'timestamp': target.lastTm, 'row': row,
+    #                                                       'original_timestamp': int(point.get('lastTm'))})
+    #
+    #             except Exception as e:
+    #                 logger(f"错误: 准备点 {point.get('id')} 时失败: {e}")
+    #
+    #
+    #     # 6. 启动发送
+    #     self.trajectory_sending_queue.sort(key=lambda item: item['timestamp'])
+    #     print(self.trajectory_sending_queue,"self.trajectory_sending_queue")
+    #
+    #     self.trajectory_sending_index = 0
+    #     logger(f"准备发送 {len(self.trajectory_sending_queue)} 个轨迹点。")
+    #     self.playback_start_send_btn.setEnabled(False)
+    #     self.playback_stop_send_btn.setEnabled(True)
+    #     self.process_trajectory_queue_v3()
+    #
+    # def process_trajectory_queue_v3(self):
+    #     """
+    #     处理并发送队列中的下一个轨迹点，并设置定时器以发送再下一个。(V3)
+    #     """
+    #     if self.trajectory_sending_index >= len(self.trajectory_sending_queue):
+    #         self.handle_playback_stop_sending_v3(completed=True)
+    #         return
+    #
+    #     current_item = self.trajectory_sending_queue[self.trajectory_sending_index]
+    #     row = current_item['row']
+    #
+    #     # 发送
+    #     target_list = target_pb2.TargetProtoList()
+    #     target_list.list.add().CopyFrom(current_item['proto'])
+    #     pb_data = target_list.SerializeToString()
+    #     topic = self.config['kafka']['topic']
+    #     self.kafka_producer.send_message(topic, pb_data)
+    #
+    #     # 1. 日志打印
+    #     self.log_message(f"发送数据 (Row {row}):\n{target_list}", "playback")
+    #
+    #     # 2. 更新点数
+    #     self.sent_points_per_row[row] += 1
+    #     self.playback_table.item(row, 6).setText(f"{self.sent_points_per_row[row]}/{self.total_points_per_row[row]}")
+    #
+    #     # 3. 更新时长
+    #     elapsed_seconds = (current_item['original_timestamp'] - self.first_timestamp_per_row[row]) / 1000.0
+    #     self.playback_table.item(row, 7).setText(f"{elapsed_seconds/60:.1f}/{self.total_duration_per_row[row]:.1f}")
+    #
+    #     self.trajectory_sending_index += 1
+    #
+    #     # 设置下一个点的定时器
+    #     if self.trajectory_sending_index < len(self.trajectory_sending_queue):
+    #         next_item = self.trajectory_sending_queue[self.trajectory_sending_index]
+    #         delay = next_item['timestamp'] - current_item['timestamp']
+    #         if delay < 0: delay = 0
+    #         self.trajectory_sending_timer.start(delay)
+    #     else:
+    #         self.handle_playback_stop_sending_v3(completed=True)
+    #
+    # def handle_playback_stop_sending_v3(self, completed=False):
+    #     """处理回放Tab下“轨迹发送”模块的终止发送按钮 (V3)"""
+    #     logger = lambda msg: self.log_message(msg, 'playback')
+    #     if self.trajectory_sending_timer.isActive():
+    #         self.trajectory_sending_timer.stop()
+    #
+    #     self.trajectory_sending_queue = []
+    #     self.trajectory_sending_index = 0
+    #     self.playback_start_send_btn.setEnabled(True)
+    #     self.playback_stop_send_btn.setEnabled(False)
+    #
+    #     if completed:
+    #         logger("所有轨迹点发送完成。")
+    #     else:
+    #         logger("轨迹发送已手动终止。")
+
+
+
+    # def process_trajectory_queue(self):
+    #     """
+    #     处理并发送队列中的下一个轨迹点，并设置定时器以发送再下一个。
+    #     """
+    #     if self.trajectory_sending_index >= len(self.trajectory_sending_queue):
+    #         self.log_message("所有轨迹点发送完成。", "playback")
+    #         self.playback_start_send_btn.setEnabled(True)
+    #         self.playback_stop_send_btn.setEnabled(False)
+    #         self.trajectory_sending_timer.stop()
+    #         return
+    #
+    #     # 发送当前点
+    #     current_item = self.trajectory_sending_queue[self.trajectory_sending_index]
+    #     target_list = target_pb2.TargetProtoList()
+    #     target_list.list.add().CopyFrom(current_item['proto'])
+    #
+    #     pb_data = target_list.SerializeToString()
+    #     topic = self.config['kafka']['topic']
+    #     self.kafka_producer.send_message(topic, pb_data)
+    #
+    #     # 日志记录
+    #     if self.trajectory_sending_index % 50 == 0 or self.trajectory_sending_index == len(self.trajectory_sending_queue) - 1:
+    #          self.log_message(f"发送进度: {self.trajectory_sending_index + 1}/{len(self.trajectory_sending_queue)}", "playback")
+    #
+    #     self.trajectory_sending_index += 1
+    #
+    #     # 设置下一个点的定时器
+    #     if self.trajectory_sending_index < len(self.trajectory_sending_queue):
+    #         next_item = self.trajectory_sending_queue[self.trajectory_sending_index]
+    #         now = int(time.time() * 1000)
+    #         # 延迟应该是下一个点应该被发送的时间戳 减去 当前时间戳
+    #         delay = next_item['timestamp'] - now
+    #
+    #         if delay < 0: # 如果已经超时，则尽快发送
+    #             delay = 0
+    #         self.trajectory_sending_timer.start(delay)
+    #     else: # 这是最后一个点，结束流程
+    #         self.log_message("所有轨迹点发送完成。", "playback")
+    #         self.playback_start_send_btn.setEnabled(True)
+    #         self.playback_stop_send_btn.setEnabled(False)
+    #         self.trajectory_sending_timer.stop()
+
+    # def handle_playback_stop_sending(self):
+    #     """处理回放Tab下“轨迹发送”模块的终止发送按钮"""
+    #     logger = lambda msg: self.log_message(msg, 'playback')
+    #     if self.trajectory_sending_timer.isActive():
+    #         self.trajectory_sending_timer.stop()
+    #
+    #     self.trajectory_sending_queue = []
+    #     self.trajectory_sending_index = 0
+    #     self.playback_start_send_btn.setEnabled(True)
+    #     self.playback_stop_send_btn.setEnabled(False)
+    #     logger("轨迹发送已终止。")
+
+
+    # def send_selected_trajectories(self):
+    #     """
+    #     核心功能：处理“发送勾选轨迹”按钮点击事件。
+    #     - 根据用户输入的基准经纬度，计算并发送所有选中轨迹的数据。
+    #     - 支持覆盖MMSI、北斗号和ID。
+    #     """
+    #     logger = lambda msg: self.log_message(msg, "playback")
+    #
+    #     # 1. 获取UI输入
+    #     try:
+    #         base_lon_str = self.playback_send_inputs['longitude'].text().strip()
+    #         base_lat_str = self.playback_send_inputs['latitude'].text().strip()
+    #         override_mmsi_str = self.playback_send_inputs['mmsi'].text().strip()
+    #         override_bds_str = self.playback_send_inputs['bds'].text().strip()
+    #
+    #         if not base_lon_str or not base_lat_str:
+    #             logger("错误: 请必须输入有效的基准经度和纬度。")
+    #             QMessageBox.warning(self, "输入错误", "请必须输入有效的基准经度和纬度。")
+    #             return
+    #
+    #         ui_base_lon = float(base_lon_str)
+    #         ui_base_lat = float(base_lat_str)
+    #
+    #     except ValueError:
+    #         logger("错误: 基准经纬度必须是有效的数字。")
+    #         QMessageBox.warning(self, "输入错误", "基准经纬度必须是有效的数字。")
+    #         return
+    #
+    #     # 2. 收集所有选中的轨迹
+    #     selected_trajectories = []
+    #     for row in range(self.playback_table.rowCount()):
+    #         item = self.playback_table.item(row, 0)
+    #         if item and item.checkState() == Qt.Checked:
+    #             cached_data = self.playback_query_cache.get(row)
+    #             if cached_data and cached_data.get("points"):
+    #                 selected_trajectories.append(cached_data["points"])
+    #
+    #     if not selected_trajectories:
+    #         logger("没有选择任何有效的轨迹进行发送。")
+    #         QMessageBox.information(self, "提示", "没有选择任何有效的轨迹进行发送。")
+    #         return
+    #
+    #     # 3. 确定计算基准点并计算偏移
+    #     try:
+    #         first_trajectory = selected_trajectories[0]
+    #         if not first_trajectory:
+    #             raise IndexError("第一条轨迹为空。")
+    #
+    #         db_base_point = first_trajectory[0]
+    #         db_base_lon = float(db_base_point.get('longitude', 0.0))
+    #         db_base_lat = float(db_base_point.get('latitude', 0.0))
+    #
+    #         lon_offset = ui_base_lon - db_base_lon
+    #         lat_offset = ui_base_lat - db_base_lat
+    #         logger(f"计算基准：UI经纬({ui_base_lon}, {ui_base_lat}), DB经纬({db_base_lon}, {db_base_lat})")
+    #         logger(f"经纬度偏移量: Lon Offset={lon_offset:.6f}, Lat Offset={lat_offset:.6f}")
+    #
+    #     except (IndexError, ValueError, TypeError) as e:
+    #         logger(f"错误：无法确定计算基准点: {e}")
+    #         QMessageBox.critical(self, "错误", f"无法确定计算基准点: {e}")
+    #         return
+    #
+    #     # 4. 准备覆盖用的ID和计数器
+    #     mmsi_counter = 0
+    #     bds_counter = 0
+    #
+    #     total_points_to_send = sum(len(traj) for traj in selected_trajectories)
+    #     sent_points = 0
+    #
+    #     logger(f"准备发送 {len(selected_trajectories)} 条轨迹, 共 {total_points_to_send} 个点。")
+    #
+    #     # 5. 遍历并发送所有点
+    #     # 识别哪些轨迹是AIS或BDS
+    #     ais_traj_indices = {i for i, traj in enumerate(selected_trajectories) if any(p.get('mmsi') for p in traj)}
+    #     bds_traj_indices = {i for i, traj in enumerate(selected_trajectories) if any(p.get('bds') for p in traj)}
+    #
+    #     for i, trajectory in enumerate(selected_trajectories):
+    #         # 为每个轨迹(目标)生成一个随机ID
+    #         target_random_id = int(time.time() % 10000 * 1000) + random.randint(0, 999)
+    #
+    #         current_override_mmsi = 0
+    #         if override_mmsi_str and i in ais_traj_indices:
+    #             current_override_mmsi = int(override_mmsi_str) + mmsi_counter
+    #             mmsi_counter += 1
+    #
+    #         current_override_bds = 0
+    #         # proto文件中没有BDS号的字段，暂时用imo字段来模拟
+    #         if override_bds_str and i in bds_traj_indices:
+    #             current_override_bds = int(override_bds_str) + bds_counter
+    #             bds_counter += 1
+    #
+    #         for point in trajectory:
+    #             try:
+    #                 target_list = target_pb2.TargetProtoList()
+    #                 target = target_list.list.add()
+    #
+    #                 # --- 填充数据 ---
+    #                 target.id = target_random_id # 使用为该轨迹生成的随机ID
+    #                 target.lastTm = int(point.get('lastTm', int(time.time() * 1000)))
+    #                 target.sost = int(point.get('sost', 1))
+    #                 target.eTargetType = int(point.get('eTargetType', 14)) # 保持原始类型
+    #                 target.adapterId = int(point.get('adapterId', 0))
+    #                 target.status = 2 # 状态为更新
+    #
+    #                 pos_info = target.pos
+    #                 pos_info.id = target.id
+    #
+    #                 # --- 覆盖MMSI/BDS ---
+    #                 if current_override_mmsi > 0:
+    #                     pos_info.mmsi = current_override_mmsi
+    #                 else:
+    #                     pos_info.mmsi = int(point.get('mmsi', 0))
+    #
+    #                 if current_override_bds > 0:
+    #                     pos_info.imo = current_override_bds # 使用imo字段模拟北斗号
+    #                 else:
+    #                     pos_info.imo = int(point.get('bds', 0)) # 假设原始数据中有bds字段
+    #
+    #                 # --- 填充其他信息 ---
+    #                 pos_info.vesselName = point.get('vesselName', '')
+    #                 pos_info.speed = float(point.get('speed', 0.0))
+    #                 pos_info.course = float(point.get('course', 0.0))
+    #                 pos_info.len = int(point.get('len', 0))
+    #                 pos_info.id_r = int(point.get('idR', 0))
+    #                 pos_info.shiptype = int(point.get('shiptype', 99))
+    #                 target.maxLen = pos_info.len
+    #
+    #                 # --- 计算并应用新的经纬度 ---
+    #                 original_lon = float(point.get('longitude', 0.0))
+    #                 original_lat = float(point.get('latitude', 0.0))
+    #                 pos_info.geoPtn.longitude = original_lon + lon_offset
+    #                 pos_info.geoPtn.latitude = original_lat + lat_offset
+    #
+    #                 # --- 填充剩余字段 ---
+    #                 pos_info.displayId = int(target.id) % 100000
+    #                 pos_info.state = int(point.get('state', 0))
+    #                 pos_info.quality = 100
+    #                 #pos_info.period = 10
+    #                 pos_info.heading = float(point.get('heading', 0.0))
+    #                 pos_info.s_class = int(point.get('sClass', 0))
+    #                 pos_info.m_mmsi = pos_info.mmsi
+    #                 pos_info.aidtype = 1
+    #                 if hasattr(pos_info, 'adapterId'):
+    #                      pos_info.adapterId = target.adapterId
+    #
+    #                 # --- 发送 ---
+    #                 pb_data = target_list.SerializeToString()
+    #                 topic = self.config['kafka']['topic']
+    #                 self.kafka_producer.send_message(topic, pb_data)
+    #
+    #                 sent_points += 1
+    #                 if sent_points % 20 == 0: # 每发送20个点更新一次日志
+    #                     logger(f"发送进度: {sent_points}/{total_points_to_send}...")
+    #                     QApplication.processEvents() # 保持UI响应
+    #
+    #                 time.sleep(0.01) # 10ms延时，防止消息风暴
+    #
+    #             except Exception as e:
+    #                 logger(f"错误: 发送点 {point.get('id')} 时失败: {e}")
+    #                 continue # 跳过这个点，继续发送下一个
+    #
+    #     logger(f"发送完成！共发送 {sent_points} 个轨迹点。")
+    #     QMessageBox.information(self, "完成", f"发送完成！共发送 {sent_points} 个轨迹点。")
+
+    # def handle_playback_start_sending(self):
+    #     """处理回放Tab下“轨迹发送”模块的开始发送按钮"""
+    #     # 此函数现在由 send_selected_trajectories 替代
+    #     self.send_selected_trajectories()
+
+    # def handle_playback_stop_sending(self):
+    #     """处理回放Tab下“轨迹发送”模块的终止发送按钮"""
+    #     logger = lambda msg: self.log_message(msg, 'playback')
+    #     if self.playback_sending_timer.isActive():
+    #         self.playback_sending_timer.stop()
+    #         logger("轨迹发送已终止。")
+    #     else:
+    #         logger("轨迹发送未在运行。")
+
+
+# 不需要的功能
+#     def send_playback_manual_data(self):
+#         """定时器调用，发送“轨迹发送”模块中手动输入的数据"""
+#         logger = lambda msg: self.log_message(msg, 'playback')
+#         try:
+#             target_list = target_pb2.TargetProtoList()
+#             target = target_list.list.add()
+#
+#             mmsi_str = self.playback_send_inputs['mmsi'].text().strip()
+#             lon_str = self.playback_send_inputs['longitude'].text().strip()
+#             lat_str = self.playback_send_inputs['latitude'].text().strip()
+#
+#             if not lon_str or not lat_str:
+#                 logger("错误: 经度和纬度是必填项。")
+#                 self.playback_sending_timer.stop()
+#                 return
+#
+#             target.id = int(time.time() * 10)
+#             target.lastTm = int(time.time() * 1000)
+#             target.sost = 1
+#             target.eTargetType = 14
+#             target.status = 2
+#
+#             pos_info = target.pos
+#             pos_info.id = target.id
+#             pos_info.mmsi = int(mmsi_str) if mmsi_str else 0
+#             pos_info.geoPtn.longitude = float(lon_str)
+#             pos_info.geoPtn.latitude = float(lat_str)
+#             pos_info.speed = 5.0
+#             pos_info.course = 90.0
+#             pos_info.len = 50
+#             pos_info.shiptype = 99
+#             pos_info.heading = pos_info.course
+#             pos_info.state = target.sost
+#             pos_info.quality = 100
+#             pos_info.period = 10
+#             pos_info.s_class = target.eTargetType
+#             pos_info.m_mmsi = pos_info.mmsi
+#             pos_info.aidtype = 1
+#
+#             logger(f"手动发送轨迹: ID={target.id}, MMSI={pos_info.mmsi}, Lon={pos_info.geoPtn.longitude:.6f}, Lat={pos_info.geoPtn.latitude:.6f}")
+#             pb_data = target_list.SerializeToString()
+#             topic = self.config['kafka']['topic']
+#             self.kafka_producer.send_message(topic, pb_data)
+#
+#         except Exception as e:
+#             logger(f"错误: 手动发送轨迹数据时失败: {e}")
+#             self.playback_sending_timer.stop()
+#
+#         if point_count > 1:
+#             try:
+#                 lasttms = [p.get('lastTm', 0) for p in points]
+#                 #print(lasttms, "lasttms")
+#                 time_diff_ms = max(lasttms) - min(lasttms)
+#                 time_diff_min = round((time_diff_ms / 1000) / 60, 1)
+#                 duration_str = str(time_diff_min)
+#             except (ValueError, TypeError):
+#                 duration_str = "Error" # Handle potential errors in data
+#
+#         duration_item = QTableWidgetItem(duration_str)
+#         duration_item.setFlags(duration_item.flags() & ~Qt.ItemIsEditable) # 时长不可编辑
+#         self.playback_table.setItem(row, 7, duration_item)
 
     def remove_selected_playback_row(self):
         """从回放表格中删除选中的行"""
@@ -1833,8 +2928,17 @@ class MainWindow(QWidget):
         try:
             mmsi = self.playback_table.item(row, 1).text().strip()
             target_id = self.playback_table.item(row, 2).text().strip()
+
             province_combo = self.playback_table.cellWidget(row, 3)
-            province_id = province_combo.currentData()
+            adapterId = province_combo.currentData()
+            province = None
+            if self.config['ui_options'].get('province'):
+                for province_item in self.config['ui_options']['province']:
+                    if province_item['adapterId'] == adapterId:
+                        province = province_item['name_en']
+                        break
+
+            #print("省:", province)
             start_time = self.playback_table.cellWidget(row, 4).dateTime().toString("yyyy-MM-dd HH:mm:ss")
             end_time = self.playback_table.cellWidget(row, 5).dateTime().toString("yyyy-MM-dd HH:mm:ss")
 
@@ -1844,7 +2948,7 @@ class MainWindow(QWidget):
                 return
 
             current_params = {
-                "mmsi": mmsi, "id": target_id, "province_id": province_id,
+                "mmsi": mmsi, "id": target_id, "province": province,
                 "start_time": start_time, "end_time": end_time
             }
         except Exception as e:
@@ -1864,7 +2968,7 @@ class MainWindow(QWidget):
         QApplication.setOverrideCursor(Qt.WaitCursor)
 
         results = self.db.query_trajectories(
-            criteria={'mmsi': mmsi, 'id': target_id, 'province_id': province_id},
+            criteria={'mmsi': mmsi, 'id': target_id, 'province': province},
             start_time=start_time,
             end_time=end_time
         )
@@ -1947,9 +3051,9 @@ class MainWindow(QWidget):
                 
                 # 刷新下拉框并自动选中刚保存的项
                 self.populate_saved_tracks_dropdown()
-                index = self.saved_tracks_combo.findData(filename)
-                if index != -1:
-                    self.saved_tracks_combo.setCurrentIndex(index)
+                # index = self.saved_tracks_combo.findData(filename)
+                # if index != -1:
+                #     self.saved_tracks_combo.setCurrentIndex(index)
                     
             except TypeError as e:
                 self.log_message(f"错误: 保存文件时发生序列化错误: {e}", "playback")
