@@ -273,7 +273,6 @@ class MainWindow(QWidget):
         self.paste_input = QTextEdit()
         self.paste_input.setPlaceholderText("在此粘贴内容（可多行），然后点击识别...")
         self.paste_input.setFixedHeight(50)
-        self.paste_input.setStyleSheet("color: black;")
         recognize_btn = QPushButton("识别")
         recognize_btn.clicked.connect(self.recognize_and_fill)
         paste_layout.addWidget(self.paste_input)

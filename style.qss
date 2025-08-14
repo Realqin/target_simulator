@@ -43,6 +43,10 @@ QLineEdit, QTextEdit {
     font-size: 10pt;
 }
 
+QLineEdit::placeholder, QTextEdit::placeholder {
+    color: #AAB7B8;
+}
+
 QLineEdit:focus, QTextEdit:focus {
     border: 1px solid #3498db;
 }
