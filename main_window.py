@@ -86,7 +86,6 @@ class MainWindow(QWidget):
         super().__init__(parent)
         self.setObjectName("MainWindow")
         self.setWindowTitle("Simu Kafka Sender")
-        self.setGeometry(100, 100, 1300, 750) # x, y, width, height
 
         # --- 回放模块状态 ---
         self.playback_query_cache = {} # {row_index: {"params": {...}, "points": [...]}}
@@ -161,6 +160,7 @@ class MainWindow(QWidget):
 
         # 初始化UI界面，确保所有UI控件都已创建
         self.init_ui()
+        self.adjustSize()
 
         # 初始化Kafka生产者，并将UI的日志函数作为回调传进去
         self.kafka_producer = KProducer(
@@ -272,7 +272,8 @@ class MainWindow(QWidget):
         paste_layout = QHBoxLayout()
         self.paste_input = QTextEdit()
         self.paste_input.setPlaceholderText("在此粘贴内容（可多行），然后点击识别...")
-        self.paste_input.setFixedHeight(80)
+        self.paste_input.setFixedHeight(50)
+        self.paste_input.setStyleSheet("color: black;")
         recognize_btn = QPushButton("识别")
         recognize_btn.clicked.connect(self.recognize_and_fill)
         paste_layout.addWidget(self.paste_input)
@@ -459,15 +460,26 @@ class MainWindow(QWidget):
         sending_group = QGroupBox("轨迹发送")
         sending_layout = QGridLayout()
 
+        # 新增：省份
+        self.playback_send_inputs["province"] = QComboBox()
+        if self.config['ui_options'].get('province'):
+            # 添加一个“未选择”或“默认”选项
+            self.playback_send_inputs["province"].addItem("默认", 0)
+            for province_item in self.config['ui_options']['province']:
+                if province_item['adapterId'] != 0: # 避免重复添加
+                    self.playback_send_inputs["province"].addItem(province_item['name'], province_item['adapterId'])
 
-        self.playback_send_inputs = {
+        sending_layout.addWidget(QLabel("省份:"), 0, 0, Qt.AlignRight)
+        sending_layout.addWidget(self.playback_send_inputs["province"], 0, 1)
+
+        self.playback_send_inputs.update({
             "mmsi": QLineEdit(),
             "bds": QLineEdit(),
             "longitude": QLineEdit(),
             "latitude": QLineEdit()
-        }
+        })
 
-        # MMSI
+        # MMSI - 行号从1开始
         sending_layout.addWidget(QLabel("MMSI:"), 1, 0, Qt.AlignRight)
         mmsi_layout = QHBoxLayout()
         mmsi_layout.addWidget(self.playback_send_inputs["mmsi"])
@@ -477,7 +489,7 @@ class MainWindow(QWidget):
         mmsi_layout.addWidget(random_mmsi_btn)
         sending_layout.addLayout(mmsi_layout, 1, 1)
 
-        # BDS
+        # BDS - 行号从2开始
         sending_layout.addWidget(QLabel("北斗号:"), 2, 0, Qt.AlignRight)
         bds_layout = QHBoxLayout()
         bds_layout.addWidget(self.playback_send_inputs["bds"])
@@ -486,15 +498,15 @@ class MainWindow(QWidget):
         bds_layout.addWidget(random_bds_btn)
         sending_layout.addLayout(bds_layout, 2, 1)
 
-        # Longitude
+        # Longitude - 行号从3开始
         sending_layout.addWidget(QLabel("经度:"), 3, 0, Qt.AlignRight)
         sending_layout.addWidget(self.playback_send_inputs["longitude"], 3, 1)
 
-        # Latitude
+        # Latitude - 行号从4开始
         sending_layout.addWidget(QLabel("纬度:"), 4, 0, Qt.AlignRight)
         sending_layout.addWidget(self.playback_send_inputs["latitude"], 4, 1)
 
-        # Buttons
+        # Buttons - 行号从5开始
         self.playback_start_send_btn = QPushButton("发送勾选轨迹")
         self.playback_stop_send_btn = QPushButton("终止发送")
         self.playback_start_send_btn.clicked.connect(self.send_selected_trajectories_v4)
@@ -506,7 +518,7 @@ class MainWindow(QWidget):
         sending_layout.addLayout(button_layout, 5, 0, 1, 2)
 
         sending_group.setLayout(sending_layout)
-        
+
         right_panel_layout = QVBoxLayout()
         right_panel_layout.addWidget(sending_group)
         right_panel_layout.addStretch()
@@ -685,21 +697,25 @@ class MainWindow(QWidget):
     def create_source_input_group(self):
         """创建信息源文本输入模块"""
         group_box = QGroupBox("信息源")
-        grid_layout = QGridLayout()
-        grid_layout.setSpacing(3)
+        h_layout = QHBoxLayout()
+        h_layout.setSpacing(10)
 
         self.inputs.update({
             "radarSource": QLineEdit(), "aisSource": QLineEdit(),
             "bdSource": QLineEdit()
         })
 
-        grid_layout.addWidget(QLabel("雷达信息源:"), 1, 0, Qt.AlignRight)
-        grid_layout.addWidget(self.inputs["radarSource"], 1, 1, 1, 4)
-        grid_layout.addWidget(QLabel("AIS信息源:"), 2, 0, Qt.AlignRight)
-        grid_layout.addWidget(self.inputs["aisSource"], 2, 1, 1, 4)
-        grid_layout.addWidget(QLabel("北斗信息源:"), 3, 0, Qt.AlignRight)
-        grid_layout.addWidget(self.inputs["bdSource"], 3, 1, 1, 4)
-        group_box.setLayout(grid_layout)
+        h_layout.addWidget(QLabel("雷达信息源:"))
+        h_layout.addWidget(self.inputs["radarSource"])
+        h_layout.addSpacing(15)
+        h_layout.addWidget(QLabel("AIS信息源:"))
+        h_layout.addWidget(self.inputs["aisSource"])
+        h_layout.addSpacing(15)
+        h_layout.addWidget(QLabel("北斗信息源:"))
+        h_layout.addWidget(self.inputs["bdSource"])
+        h_layout.addStretch(1)
+
+        group_box.setLayout(h_layout)
         return group_box
 
     def create_association_group(self):
@@ -1083,6 +1099,9 @@ class MainWindow(QWidget):
         if self.association_state != "sending":
             if not self._initialize_location_calculator():
                 return
+            
+            self.send_one_time_static_info()
+
             try:
                 interval_ms = int(float(self.frequency_input.text()) * 1000)
                 if interval_ms <= 0: raise ValueError
@@ -1111,6 +1130,7 @@ class MainWindow(QWidget):
         if state == "stopped":
             if not self._initialize_location_calculator():
                 return
+            self.send_one_time_static_info()
             self.send_realtime_target_data()
             self.simulation_timer.start(1000)
             self.sending_timer.start(int(float(self.frequency_input.text()) * 1000))
@@ -1401,8 +1421,6 @@ class MainWindow(QWidget):
                 self._send_protobuf_data(selected_class)
             else:
                 self._send_protobuf_data(selected_class)
-                if "AIS" in selected_class:
-                    self._send_ais_static_data()
                 if "BDS" in selected_class:
                     self._send_bds_json_data(selected_class)
 
@@ -1503,23 +1521,8 @@ class MainWindow(QWidget):
         self.log_message(f"已向 Topic '{topic}' 发送 Protobuf 消息。")
 
     def _send_ais_static_data(self):
-        """构建并发送AIS静态信息JSON。"""
-        mmsi = self.get_field_value("mmsi")
-        if not mmsi:
-            self.log_message("信息: MMSI为空，跳过发送AIS静态信息。")
-            return
-
-        static_topic = self.config['kafka'].get('ais_static_topic')
-        if not static_topic:
-            self.log_message("警告: 在 config.json 中未找到 'ais_static_topic'。")
-            return
-
-        ais_info = {"MMSI": mmsi, "Vessel Name": self.get_field_value("vesselName")}
-        json_payload = {"AisExts": [ais_info]}
-        json_data = json.dumps(json_payload, ensure_ascii=False, indent=2)
-
-        self.kafka_producer.send_message(static_topic, json_data.encode('utf-8'))
-        self.log_message(f"已向 Topic '{static_topic}' 发送AIS静态JSON消息。")
+        """构建并发送AIS静态信息JSON。(此功能已被禁用以防止重复发送)"""
+        pass
 
     def _send_bds_json_data(self, selected_class):
         """构建并发送BDS位置JSON。"""
@@ -1831,7 +1834,7 @@ class MainWindow(QWidget):
             self.playback_timer.stop()
             self.log_message("因错误导致回放终止。", "playback")
 
-    
+
 
     def populate_saved_tracks_dropdown(self):
         """加载/更新“选择已有记录”下拉框"""
@@ -1985,7 +1988,6 @@ class MainWindow(QWidget):
         self.first_timestamp_per_row.clear()
         self.total_duration_per_row.clear()
 
-        # 2. 获取UI输入
         base_lon_str = self.playback_send_inputs['longitude'].text().strip()
         base_lat_str = self.playback_send_inputs['latitude'].text().strip()
         override_mmsi_str = self.playback_send_inputs['mmsi'].text().strip()
@@ -1996,7 +1998,7 @@ class MainWindow(QWidget):
         # 3. 收集选中的轨迹并初始化UI
         all_points = []
         selected_trajectories_data = []
-        
+
         rows_to_send = []
         for row in range(self.playback_table.rowCount()):
             item = self.playback_table.item(row, 0)
@@ -2015,7 +2017,7 @@ class MainWindow(QWidget):
                 if not points: continue
                 all_points.extend(points)
                 selected_trajectories_data.append({'row': row, 'points': points})
-                
+
                 self.total_points_per_row[row] = len(points)
                 self.sent_points_per_row[row] = 0
                 first_ts = int(points[0].get('lastTm', 0))
@@ -2023,7 +2025,7 @@ class MainWindow(QWidget):
                 self.first_timestamp_per_row[row] = first_ts
                 # --- FIX 3: Calculate duration in minutes ---
                 self.total_duration_per_row[row] = (last_ts - first_ts) / 60000.0
-                
+
                 self.playback_table.setItem(row, 6, QTableWidgetItem(f"0/{self.total_points_per_row[row]}"))
                 self.playback_table.setItem(row, 7, QTableWidgetItem(f"0.00/{self.total_duration_per_row[row]:.2f}"))
 
@@ -2035,7 +2037,7 @@ class MainWindow(QWidget):
         try:
             first_trajectory_for_location = selected_trajectories_data[0]['points']
             location_base_point = first_trajectory_for_location[0]
-            
+
             if use_offset:
                 ui_base_lon, ui_base_lat = float(base_lon_str), float(base_lat_str)
                 db_base_lon = float(location_base_point.get('longitude', 0.0))
@@ -2057,7 +2059,7 @@ class MainWindow(QWidget):
         self.trajectory_sending_queue = []
         start_send_time = int(time.time() * 1000)
         mmsi_counter, bds_counter = 0, 0
-        
+
         ais_traj_ids = {id(traj['points']) for traj in selected_trajectories_data if any(p.get('mmsi') for p in traj['points'])}
         bds_traj_ids = {id(traj['points']) for traj in selected_trajectories_data if any(p.get('bds') for p in traj['points'])}
 
@@ -2066,7 +2068,7 @@ class MainWindow(QWidget):
             trajectory = trajectory_item['points']
             # --- FIX 1: Generate a truly unique ID for each trajectory ---
             target_random_id = self._generate_random_id_internal(logger)
-            
+
             current_override_mmsi = 0
             if override_mmsi_str and id(trajectory) in ais_traj_ids:
                 current_override_mmsi = int(override_mmsi_str) + mmsi_counter
@@ -2088,7 +2090,7 @@ class MainWindow(QWidget):
                     if not original_timestamp:
                         logger(f"警告: 轨迹点 (ID: {point.get('id')}) 缺少有效时间戳，已跳过。")
                         continue
-                        
+
                     time_delta = original_timestamp - first_db_timestamp
                     target.lastTm = start_send_time + time_delta
 
@@ -2098,11 +2100,15 @@ class MainWindow(QWidget):
 
 
                     target.maxLen = int(point.get('maxLen') or 0)
-
-                    # 获取 adapterId 字符串
-                    adapter_id_str = point.get('province')
-                    adapter_id = 0  # 默认值
-                    if self.config['ui_options'].get('province'):
+                    adapter_id = 12  # 默认值
+                    # 优先从界面上获取，界面上没有值就用point轨迹点里的
+                    province_page = self.playback_send_inputs['province'].currentData()
+                    if province_page != 0 :
+                        adapter_id = province_page
+                    else:
+                        # 获取 adapterId 字符串
+                        adapter_id_str = point.get('province')
+                        print("当前 adapterId:",adapter_id_str)
                         for province_item in self.config['ui_options']['province']:
                             if province_item['name_en'] == adapter_id_str:
                                 adapter_id = province_item['adapterId']
@@ -2203,7 +2209,7 @@ class MainWindow(QWidget):
         if not self.trajectory_sending_queue:
             logger("错误: 准备发送队列失败，队列为空。")
             return
-            
+
         self.trajectory_sending_queue.sort(key=lambda item: item['timestamp'])
         self.trajectory_sending_index = 0
         logger(f"准备发送 {len(self.trajectory_sending_queue)} 个轨迹点。")
@@ -2221,13 +2227,13 @@ class MainWindow(QWidget):
 
         current_item = self.trajectory_sending_queue[self.trajectory_sending_index]
         row = current_item['row']
-        
+
         target_list = target_pb2.TargetProtoList()
         target_list.list.add().CopyFrom(current_item['proto'])
         pb_data = target_list.SerializeToString()
         topic = self.config['kafka']['topic']
         self.kafka_producer.send_message(topic, pb_data)
-        
+
         self.log_message(f"发送数据 (Row {row}):\n{target_list}", "playback")
 
         self.sent_points_per_row[row] += 1
@@ -2236,7 +2242,7 @@ class MainWindow(QWidget):
         # --- FIX 3: Calculate and display elapsed time in minutes ---
         elapsed_minutes = ((current_item['original_timestamp'] - self.first_timestamp_per_row[row]) / 1000.0) / 60.0
         self.playback_table.item(row, 7).setText(f"{elapsed_minutes:.2f}/{self.total_duration_per_row[row]:.2f}")
-        
+
         self.trajectory_sending_index += 1
 
         if self.trajectory_sending_index < len(self.trajectory_sending_queue):
@@ -2252,7 +2258,7 @@ class MainWindow(QWidget):
         logger = lambda msg: self.log_message(msg, 'playback')
         if self.trajectory_sending_timer.isActive():
             self.trajectory_sending_timer.stop()
-        
+
         # --- FIX 2: Reset UI state on stop ---
         for row, total_points in self.total_points_per_row.items():
             if self.playback_table.rowCount() > row:
@@ -2265,10 +2271,10 @@ class MainWindow(QWidget):
         self.total_points_per_row.clear()
         self.first_timestamp_per_row.clear()
         self.total_duration_per_row.clear()
-        
+
         self.playback_start_send_btn.setEnabled(True)
         self.playback_stop_send_btn.setEnabled(False)
-        
+
         if completed:
             logger("所有轨迹点发送完成。")
         else:
@@ -2985,7 +2991,7 @@ class MainWindow(QWidget):
         # 更新缓存和UI
         self.playback_query_cache[row] = {"params": current_params, "points": points}
         self.playback_table.item(row, 6).setText(str(point_count))
-        
+
         # 计算并更新轨迹时长
         duration_str = "0.0"
         if point_count > 1:
@@ -3046,15 +3052,15 @@ class MainWindow(QWidget):
                 with open(filepath, 'w', encoding='utf-8') as f:
                     # 使用自定义的序列化函数来处理datetime等特殊类型
                     json.dump(data_to_save, f, indent=4, ensure_ascii=False, default=json_serial)
-                
+
                 self.log_message(f"成功将当前查询保存为 '{filename}'", "playback")
-                
+
                 # 刷新下拉框并自动选中刚保存的项
                 self.populate_saved_tracks_dropdown()
                 # index = self.saved_tracks_combo.findData(filename)
                 # if index != -1:
                 #     self.saved_tracks_combo.setCurrentIndex(index)
-                    
+
             except TypeError as e:
                 self.log_message(f"错误: 保存文件时发生序列化错误: {e}", "playback")
             except Exception as e:
@@ -3065,7 +3071,7 @@ class MainWindow(QWidget):
         在预览区绘制所有被勾选的轨迹，并实现高级可视化功能。
         """
         self.trajectory_scene.clear()
-        
+
         # 1. 收集所有需要绘制的、经过排序的轨迹数据
         selected_rows_with_data = []
         for row in range(self.playback_table.rowCount()):
@@ -3100,20 +3106,20 @@ class MainWindow(QWidget):
 
         for i, points in enumerate(selected_rows_with_data):
             color = palette[i % len(palette)]
-            
+
             valid_points = []
             for p in points:
                 try:
                     lon, lat = float(p['longitude']), float(p['latitude'])
                     if -180 <= lon <= 180 and -90 <= lat <= 90:
                         valid_points.append({
-                            'lon': lon, 'lat': lat, 'color': color, 
+                            'lon': lon, 'lat': lat, 'color': color,
                             'lasttm': p.get('lastTm', 0),
                             'lastdt': p.get('lastDT', 'N/A')
                         })
                 except (ValueError, TypeError, KeyError):
                     continue
-            
+
             if not valid_points:
                 continue
 
@@ -3124,7 +3130,7 @@ class MainWindow(QWidget):
             path.moveTo(valid_points[0]['lon'], -valid_points[0]['lat'])
             for p in valid_points[1:]:
                 path.lineTo(p['lon'], -p['lat'])
-            
+
             all_paths.append({'path': path, 'color': color})
             full_bounding_rect = full_bounding_rect.united(path.boundingRect())
 
@@ -3140,7 +3146,7 @@ class MainWindow(QWidget):
                     points_for_labels.extend([valid_points[k] for k in sorted(list(sampled_indices))])
                 else:
                     points_for_labels.extend(valid_points)
-            
+
             all_points_to_draw.extend(valid_points)
             #print("points_for_labels:", len(points_for_labels))
 
@@ -3152,11 +3158,11 @@ class MainWindow(QWidget):
 
         # 绘图元素
         line_pen = QPen()
-        line_pen.setWidth(0) 
+        line_pen.setWidth(0)
         line_pen.setCosmetic(True)
         point_pen = QPen(Qt.transparent)
         point_brush = QBrush(Qt.SolidPattern)
-        
+
         # 绘制轨迹线
         for path_info in all_paths:
             line_pen.setColor(path_info['color'])
