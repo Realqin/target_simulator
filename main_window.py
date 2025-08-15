@@ -77,6 +77,19 @@ class ZoomableView(QGraphicsView):
         self.zoomed.emit()
 
 
+class CustomDateTimeEdit(QDateTimeEdit):
+    """
+    A QDateTimeEdit that defaults the calendar popup to the current time
+    if the widget was previously cleared.
+    """
+    def mousePressEvent(self, event):
+        # If the current datetime is the minimum (our cleared state),
+        # set it to the current time before showing the calendar.
+        if self.dateTime() == self.minimumDateTime():
+            self.setDateTime(QDateTime.currentDateTime())
+        super().mousePressEvent(event)
+
+
 class MainWindow(QWidget):
     """
     应用程序的主窗口类。
@@ -158,6 +171,15 @@ class MainWindow(QWidget):
         self.default_lineedit_style = ""
         self.load_and_extract_styles()
 
+        # 初始化数据库连接
+        try:
+            self.db = Database(self.config.get('starrocks'))
+            if not self.db.connect():
+                self.log_message("错误: 应用启动时数据库连接失败。")
+        except ValueError as e:
+            self.log_message(f"错误: {e}")
+            self.db = None
+
         # 初始化UI界面，确保所有UI控件都已创建
         self.init_ui()
         self.adjustSize()
@@ -169,15 +191,6 @@ class MainWindow(QWidget):
         )
         # 在UI准备好之后再连接Kafka
         self.kafka_producer.connect()
-
-        # 初始化数据库连接
-        try:
-            self.db = Database(self.config.get('starrocks'))
-            if not self.db.connect():
-                self.log_message("错误: 应用启动时数据库连接失败。")
-        except ValueError as e:
-            self.log_message(f"错误: {e}")
-            self.db = None
 
     def load_and_extract_styles(self):
         """加载QSS文件并提取QLineEdit的默认样式"""
@@ -271,6 +284,7 @@ class MainWindow(QWidget):
         paste_group = QGroupBox("快速识别")
         paste_layout = QHBoxLayout()
         self.paste_input = QTextEdit()
+        self.paste_input.setAcceptRichText(False)
         self.paste_input.setPlaceholderText("在此粘贴内容（可多行），然后点击识别...")
         self.paste_input.setFixedHeight(50)
         recognize_btn = QPushButton("识别")
@@ -334,6 +348,7 @@ class MainWindow(QWidget):
         paste_group = QGroupBox("快速识别")
         paste_layout = QHBoxLayout()
         self.static_paste_input = QTextEdit()
+        self.static_paste_input.setAcceptRichText(False)
         self.static_paste_input.setPlaceholderText("在此粘贴内容（可多行），然后点击识别...")
         self.static_paste_input.setFixedHeight(80)
         recognize_btn = QPushButton("识别")
@@ -703,6 +718,10 @@ class MainWindow(QWidget):
             "radarSource": QLineEdit(), "aisSource": QLineEdit(),
             "bdSource": QLineEdit()
         })
+        # 为雷达信息源输入框添加占位符文本
+        self.inputs["radarSource"].setPlaceholderText("输入id，逗号分隔")
+        self.inputs["aisSource"].setPlaceholderText("输入id，逗号分隔")
+        self.inputs["bdSource"].setPlaceholderText("输入id")
 
         h_layout.addWidget(QLabel("雷达信息源:"))
         h_layout.addWidget(self.inputs["radarSource"])
@@ -860,14 +879,17 @@ class MainWindow(QWidget):
             "len": QLineEdit(),"shipWidth": QLineEdit(),
             "draught": QLineEdit(),
             "shiptype": QComboBox(), "destination": QLineEdit(),
-            "eta": QDateTimeEdit(QDateTime.currentDateTime()),
+            "eta": CustomDateTimeEdit(),
         }
 
         for text, value in self.config['ui_options']['shiptype'].items():
             self.static_inputs['shiptype'].addItem(text, value)
 
-        self.static_inputs["eta"].setDisplayFormat("yyyy-MM-dd HH:mm:ss")
-        self.static_inputs["eta"].setCalendarPopup(True)
+        eta_widget = self.static_inputs["eta"]
+        eta_widget.setDisplayFormat("yyyy-MM-dd HH:mm:ss")
+        eta_widget.setCalendarPopup(True)
+        eta_widget.setSpecialValueText(" ")  # Display empty space when cleared
+        eta_widget.setDateTime(QDateTime.currentDateTime()) # Default to current time
 
         if 'deviceCategory' in self.config['ui_options']:
             for text, value in self.config['ui_options']['deviceCategory'].items():
@@ -891,6 +913,7 @@ class MainWindow(QWidget):
         grid_layout.addWidget(self.static_inputs["deviceCategory"], 1, 1)
         grid_layout.addWidget(QLabel("船籍:"), 1, 2, Qt.AlignRight)
         grid_layout.addWidget(self.static_inputs["nationality"], 1, 3)
+        self.static_inputs["nationality"].setPlaceholderText("不需要填写，根据mmsi识别的")
 
         grid_layout.addWidget(QLabel("IMO:"), 2, 0, Qt.AlignRight)
         grid_layout.addWidget(self.static_inputs["imo"], 2, 1)
@@ -919,8 +942,15 @@ class MainWindow(QWidget):
         grid_layout.addWidget(QLabel("船舶类型:"), 4, 2, Qt.AlignRight)
         grid_layout.addWidget(self.static_inputs["shiptype"], 4, 3)
 
+        eta_layout = QHBoxLayout()
+        eta_layout.setContentsMargins(0, 0, 0, 0)
+        eta_layout.addWidget(self.static_inputs["eta"])
+        clear_eta_btn = QPushButton("清空")
+        clear_eta_btn.setFixedWidth(60)
+        clear_eta_btn.clicked.connect(self.clear_eta_datetime)
+        eta_layout.addWidget(clear_eta_btn)
         grid_layout.addWidget(QLabel("预到时间:"), 5, 0, Qt.AlignRight)
-        grid_layout.addWidget(self.static_inputs["eta"], 5, 1)
+        grid_layout.addLayout(eta_layout, 5, 1)
 
 
         grid_layout.addWidget(QLabel("目的地:"), 5, 2, Qt.AlignRight)
@@ -954,6 +984,12 @@ class MainWindow(QWidget):
         v_layout.addLayout(button_layout)
         group_box.setLayout(v_layout)
         return group_box
+
+    def clear_eta_datetime(self):
+        """Clears the ETA QDateTimeEdit widget by setting it to its minimum value."""
+        eta_widget = self.static_inputs.get("eta")
+        if eta_widget:
+            eta_widget.setDateTime(eta_widget.minimumDateTime())
 
     # ===================================================================
     # 通用及实时目标 - 逻辑
@@ -1323,7 +1359,7 @@ class MainWindow(QWidget):
 
     def update_association_timer_display(self):
         """更新时长标签的显示"""
-        self.association_time_label.setText(f"时长: <font color='#3498db'>0</font> 秒")
+        self.association_time_label.setText(f"时长: <font color='#3498db'>{self.association_seconds}</font> 秒")
 
     def update_simulation(self):
         """根据关联模式，实时计算并更新UI上的速度和位置"""
@@ -1410,6 +1446,7 @@ class MainWindow(QWidget):
     def send_realtime_target_data(self):
         """
         核心调度函数：读取UI上的当前值，并根据目标类型调用相应的发送函数。
+        不用管静态信息，在点击开始发送时处理
         """
         try:
             selected_class = self.inputs['eTargetType'].currentText()
@@ -1441,17 +1478,16 @@ class MainWindow(QWidget):
                 if rule['ui_class'] == selected_class and rule['ui_state'] == selected_state:
                     eTargetType_val = rule['eTargetType']
                     break
-
+        # 没有输入id时执行会默认生成一个
         target.id = self.get_field_value("id", int, 0)
         if (target.id == 0) & (selected_class != "BDS"):
             self._generate_random_value("id", "ID", self.inputs, self.log_message)
             target.id = self.get_field_value("id", int, 0)
+
         target.lastTm = int(time.time() * 1000)
         target.sost = self.inputs['sost'].currentData()
         target.eTargetType = eTargetType_val
-        if self.inputs['province'].currentIndex() > 0:
-            target.adapterId = self.inputs['province'].currentData()
-
+        target.adapterId = self.inputs['province'].currentData()
         if override_status is not None:
             target.status = override_status
         elif self.data_status_checkbox.isChecked():
@@ -1461,11 +1497,36 @@ class MainWindow(QWidget):
 
         pos_info = target.pos
         pos_info.id = target.id
-        pos_info.mmsi = self.get_field_value("mmsi", int, 0)
-        if (pos_info.mmsi == 0) & ("AIS" in selected_class):
-            self._generate_random_value("mmsi", "MMSI", self.inputs, self.log_message)
+
+        if "AIS" in selected_class:
             pos_info.mmsi = self.get_field_value("mmsi", int, 0)
-        pos_info.vesselName = self.get_field_value("vesselName")
+            if (pos_info.mmsi == 0) and ("AIS" in selected_class):
+                self._generate_random_value("mmsi", "MMSI", self.inputs, self.log_message)
+                pos_info.mmsi = self.get_field_value("mmsi", int, 0)
+            pos_info.vesselName = self.get_field_value("vesselName")
+            ais_source_text = self.inputs["aisSource"].text().strip()
+            if ais_source_text:
+                source = target.sources.add()
+                source.provider = "HLX"
+                source.type = "AIS"
+                ais_ids = [id.strip() for id in ais_source_text.split(',') if id.strip()]
+                for ais_id in ais_ids:
+                    source.ids.append(ais_id)
+                    info = target.vecFusionedTargetInfo.add()
+                    info.uiStationType = 65
+                    info.ullPosUpdateTime = target.lastTm
+                    info.ullUniqueId = target.id
+                    info.uiStationId = int(ais_id)
+        else:
+            pos_info.mmsi = 0
+            pos_info.vesselName = ""
+            self.inputs['mmsi'].clear()
+            self.inputs['vesselName'].clear()
+
+        if "BDS" not in selected_class:
+            self.inputs['bds'].clear()
+            self.inputs['shipName'].clear()
+
         pos_info.speed = self.get_field_value("speed", float, 0.0)
         pos_info.course = self.get_field_value("course", float, 0.0)
         pos_info.len = self.get_field_value("len", int, 0)
@@ -1499,19 +1560,14 @@ class MainWindow(QWidget):
                 info.ullUniqueId = target.id
                 info.uiStationId = int(radar_id)
 
-        ais_source_text = self.inputs["aisSource"].text().strip()
-        if ais_source_text:
-            source = target.sources.add()
-            source.provider = "HLX"
-            source.type = "AIS"
-            ais_ids = [id.strip() for id in ais_source_text.split(',') if id.strip()]
-            for ais_id in ais_ids:
-                source.ids.append(ais_id)
-                info = target.vecFusionedTargetInfo.add()
-                info.uiStationType = 65
-                info.ullPosUpdateTime = target.lastTm
-                info.ullUniqueId = target.id
-                info.uiStationId = int(ais_id)
+
+
+        #做一些异常输入值处理
+        #当目标是纯雷达时，发送去掉mmsi号，船名
+        # if "RADAR" == selected_class:
+        #     pos_info.mmsi = ''
+        #     pos_info.vesselName = ''''
+
 
         self.log_message("构造的 Protobuf 消息内容:\n" + str(target).strip())
         pb_data = target_list.SerializeToString()
@@ -1543,6 +1599,10 @@ class MainWindow(QWidget):
             self._generate_random_value("bds", "BDS", self.inputs, self.log_message)
             terminal = self.get_field_value("bds", float, 0.0)
 
+        if "AIS" not in selected_class:
+            self.inputs['mmsi'].clear()
+            self.inputs['vesselName'].clear()
+
         bds_payload = {
             "altitude": 0, "communicate": 0,
             "course": self.get_field_value("course", float, 0.0),
@@ -1554,7 +1614,7 @@ class MainWindow(QWidget):
             "shipLength": self.get_field_value("len", float, 0.0),
             "shipName": self.get_field_value("shipName"),
             "source": 2, "speed": self.get_field_value("speed", float, 0.0),
-            "status": 0, "terminal":self.get_field_value("bds", float, 0.0),
+            "status": 0, "terminal":terminal,
             "tilt": 0, "utc": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
         }
 
@@ -1609,7 +1669,10 @@ class MainWindow(QWidget):
                         return default_value
                     text = widget.currentText()
                 elif isinstance(widget, QDateTimeEdit):
-                    text = widget.dateTime().toString("yyyy-MM-dd HH:mm:ss")
+                    if widget.dateTime() == widget.minimumDateTime():
+                        text = ""
+                    else:
+                        text = widget.dateTime().toString("yyyy-MM-dd HH:mm:ss")
 
                 if not text: return default_value
                 try:
@@ -1667,7 +1730,7 @@ class MainWindow(QWidget):
     def _recognize_and_fill_generic(self, paste_widget, inputs_dict, logger):
         content = paste_widget.toPlainText()
         if not content: return
-        label_map = { "目标类型": "eTargetType", "AIS船名": "vesselName", "ID": "id", "MMSI": "mmsi", "北斗号": "bds", "北斗船名": "shipName", "船舶类型": "shiptype", "航向": "course", "航速": "speed", "经度": "longitude", "纬度": "latitude", "船长": "len", "最大船长": "maxLength", "目标状态": "sost", "数据状态": "dataStatus", "设备分类": "deviceCategory", "船籍": "nationality", "IMO": "imo", "呼号": "callSign", "船宽": "shipWidth", "吃水": "draught", "艏向": "heading", "预到时间": "eta", "目的地": "destination", "AIS信息源":"aisSource","北斗信息源":"bdSource","雷达信息源":"radarSource","省份":"province" }
+        label_map = { "目标类型": "eTargetType", "船名": "vesselName", "ID": "id", "MMSI": "mmsi", "北斗号": "bds", "北斗船名": "shipName", "船舶类型": "shiptype", "航向": "course", "航速": "speed", "经度": "longitude", "纬度": "latitude", "最大船长": "maxLength", "船长": "len", "目标状态": "sost", "数据状态": "dataStatus", "设备分类": "deviceCategory", "IMO": "imo", "呼号": "callSign", "船宽": "shipWidth", "吃水": "draught", "艏向": "heading", "预到时间": "eta", "目的地": "destination","省份":"province" }
         numeric_fields = { "course", "speed", "longitude", "latitude", "len", "maxLength", "shipWidth", "draught", "heading" }
         filled_fields = []
         for line in content.splitlines():
@@ -1918,7 +1981,7 @@ class MainWindow(QWidget):
         # 1. 绘制轨迹 (复选框)
         chk_box_item = QTableWidgetItem()
         chk_box_item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
-        chk_box_item.setCheckState(Qt.Checked if params.get("draw", True) else Qt.Unchecked)
+        chk_box_item.setCheckState(Qt.Checked if params.get("draw", False) else Qt.Unchecked) # 默认不勾选
         self.playback_table.setItem(row, 0, chk_box_item)
 
         # 2. MMSI
@@ -3361,7 +3424,16 @@ class MainWindow(QWidget):
             with open('initial_target.json', 'r', encoding='utf-8') as f:
                 initial_data = json.load(f)
 
+            # 根据 dataStatus 字段是否存在且有值，来设置复选框状态
+            if 'dataStatus' in initial_data and initial_data.get('dataStatus') >= 0:
+                self.data_status_checkbox.setChecked(False)
+            else:
+                self.data_status_checkbox.setChecked(True)
+
+            # 填充所有其他字段
             for key, value in initial_data.items():
+                if value is None:
+                    continue
                 widget = self.inputs.get(key)
                 if widget:
                     if isinstance(widget, QLineEdit):
@@ -3375,22 +3447,35 @@ class MainWindow(QWidget):
         except Exception as e:
             self.log_message(f"错误: 加载初始目标失败 - {e}")
 
+
     def closeEvent(self, event):
         """
         重写窗口关闭事件，以确保在退出前断开与Kafka的连接。
         """
         self.log_message("正在关闭应用程序...")
+        print('正在关闭应用程序...')
+
+
+        self.log_message("窗口关闭：为当前正在发送的目标发送终止(delete)消息...")
+
+        # 停止所有定时器，以防在关闭过程中发送额外消息
+        self.sending_timer.stop()
+        self.simulation_timer.stop()
+        self.association_timer.stop()
+        self.static_sending_timer.stop()
+        self.playback_timer.stop()
+
+        if (self.association_state =="sending") or (self.association_state =="paused"):
+            # 获取当前目标类型并发送状态为3的消息
+            selected_class = self.inputs['eTargetType'].currentText()
+            print(selected_class, "selected_class")
+            self._send_protobuf_data(selected_class, override_status=3)
+            self.log_message("终止消息已发送。")
+
         if self.kafka_producer:
             self.kafka_producer.close()
         if self.db:
             self.db.close()
-
-        # 停止所有定时器
-        self.sending_timer.stop()
-        self.association_timer.stop()
-        self.simulation_timer.stop()
-        self.static_sending_timer.stop()
-        self.playback_timer.stop()
 
         self.log_message("清理完成，再见！")
         event.accept()

@@ -1,49 +1,48 @@
 @echo off
-echo ==================================================
-echo  Starting the PyInstaller build process (Folder Mode)...
-echo ==================================================
+chcp 65001 > nul
 
-REM Get the directory of the batch file and define the output name
-set "SCRIPT_DIR=%~dp0"
-set "OUTPUT_DIR_NAME=SimuKafkaSender"
+echo [INFO] Activating virtual environment...
+call .\.venv\Scripts\activate.bat
 
-echo Cleaning up previous builds...
-rmdir /s /q "%SCRIPT_DIR%build"
-rmdir /s /q "%SCRIPT_DIR%dist"
-del /q "%SCRIPT_DIR%*.spec"
+echo [INFO] Installing dependencies from requirements.txt...
+pip install -r requirements.txt
 
-echo Running PyInstaller...
+echo [INFO] Cleaning up previous builds...
+if exist build rmdir /s /q build
+if exist dist rmdir /s /q dist
 
-pyinstaller --name "%OUTPUT_DIR_NAME%" ^
-            --onedir ^
-            --windowed ^
-            --add-data "config.json;." ^
-            --add-data "style.qss;." ^
-            --add-data "initial_target.json;." ^
-            --hidden-import="PyQt5.sip" ^
-            --hidden-import="sqlalchemy.dialects.mysql" ^
-            main.py
+echo [INFO] Building the FINAL executable (windowed)...
+pyinstaller --name SimuKafkaSender ^
+    --onefile ^
+    --windowed ^
+    --clean ^
+    --hidden-import "PyQt5.sip" ^
+    main.py
 
-echo ==================================================
-echo Build process finished.
-echo ==================================================
+echo [INFO] Building the DEBUG executable (with console)...
+pyinstaller --name SimuKafkaSender_debug ^
+    --onefile ^
+    --clean ^
+    --hidden-import "PyQt5.sip" ^
+    main.py
 
-REM Check if the build was successful before creating the data_track folder
-if exist "%SCRIPT_DIR%dist\%OUTPUT_DIR_NAME%\%OUTPUT_DIR_NAME%.exe" (
-    echo.
-    echo Creating 'data_track' directory...
-    mkdir "%SCRIPT_DIR%dist\%OUTPUT_DIR_NAME%\data_track"
-    
-    echo.
-    echo Success! The application folder can be found in:
-    echo %SCRIPT_DIR%dist\%OUTPUT_DIR_NAME%
-    echo.
-    echo You can now edit 'config.json' inside that folder directly.
-    echo.
-) else (
-    echo.
-    echo Error: Build failed. Please check the output above for errors.
-    echo.
-)
+echo [INFO] Copying configuration files to dist folder...
+xcopy "config.json" "dist\" /Y
+xcopy "initial_target.json" "dist\" /Y
+xcopy "style.qss" "dist\" /Y
 
+echo [INFO] Deactivating virtual environment...
+deactivate
+
+echo [SUCCESS] Build finished.
+echo The 'dist' folder now contains everything needed to run.
+echo.
+echo [ACTION] To find the error, please run the debug version and see the output.
+echo        You can redirect the output to a log file like this:
+echo.
+echo   cd dist
+echo   SimuKafkaSender_debug.exe > log.txt 2>&1
+echo.
+echo   Then, open 'log.txt' to see the error details.
+echo.
 pause
