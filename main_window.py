@@ -1523,6 +1523,8 @@ class MainWindow(QWidget):
             self.inputs['mmsi'].clear()
             self.inputs['vesselName'].clear()
 
+
+
         if "BDS" not in selected_class:
             self.inputs['bds'].clear()
             self.inputs['shipName'].clear()
@@ -1560,13 +1562,13 @@ class MainWindow(QWidget):
                 info.ullUniqueId = target.id
                 info.uiStationId = int(radar_id)
 
-
-
-        #做一些异常输入值处理
-        #当目标是纯雷达时，发送去掉mmsi号，船名
-        # if "RADAR" == selected_class:
-        #     pos_info.mmsi = ''
-        #     pos_info.vesselName = ''''
+        if "RADAR" == selected_class:
+            pos_info.shiptype = 99
+            # 更新船舶类型UI回显为“其他”
+            shiptype_combo = self.inputs['shiptype']
+            other_index = shiptype_combo.findText("其他")
+            if other_index != -1:
+                shiptype_combo.setCurrentIndex(other_index)
 
 
         self.log_message("构造的 Protobuf 消息内容:\n" + str(target).strip())
