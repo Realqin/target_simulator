@@ -16,6 +16,7 @@ pyinstaller --name SimuKafkaSender ^
     --onefile ^
     --windowed ^
     --clean ^
+    --add-data "checkmark.svg;." ^
     --hidden-import "PyQt5.sip" ^
     main.py
 
@@ -23,6 +24,7 @@ echo [INFO] Building the DEBUG executable (with console)...
 pyinstaller --name SimuKafkaSender_debug ^
     --onefile ^
     --clean ^
+    --add-data "checkmark.svg;." ^
     --hidden-import "PyQt5.sip" ^
     main.py
 
@@ -30,6 +32,7 @@ echo [INFO] Copying configuration files to dist folder...
 xcopy "config.json" "dist\" /Y
 xcopy "initial_target.json" "dist\" /Y
 xcopy "style.qss" "dist\" /Y
+xcopy "checkmark.svg" "dist\" /Y
 
 echo [INFO] Deactivating virtual environment...
 deactivate

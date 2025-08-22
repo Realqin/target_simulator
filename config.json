@@ -5,14 +5,6 @@
     "ais_static_topic": "aisStaticInfoJs",
     "bds_topic": "bds_ShanDong_changdao"
   },
-  "mysql": {
-    "host": "10.100.0.14",
-    "port": 9030,
-    "user": "root",
-    "password": "",
-    "database": "ods",
-    "table": "ods_original_trajectory"
-  },
   "starrocks": {
     "host": "10.100.0.14",
     "port": 9030,
@@ -46,16 +38,16 @@
        "OTHERS": 1
     },
 
-    "shiptype": {
-      "渔船": 30,
-      "货船": 70,
-      "油船": 80,
-      "客船": 60,
-      "拖船": 52,
-      "公务船":55,
-      "作业船":33,
-      "其他": 200
-    },
+    "shiptype": [
+      {"name":"渔船", "code":30, "name_en":"Fish"},
+      {"name":"货船", "code":70, "name_en":"Cargo"},
+      {"name":"油船", "code":80, "name_en":"Tanker"},
+      {"name":"客船", "code":60, "name_en":"Passenger"},
+      {"name":"拖船", "code":52, "name_en":"Tug"},
+      {"name":"公务船", "code":55, "name_en":"Official"},
+      {"name":"作业船", "code":33, "name_en":"Service"},
+      {"name":"其他", "code":200, "name_en":"Other"}
+    ],
     "deviceCategory": {
       "A": 1,
       "B": 2

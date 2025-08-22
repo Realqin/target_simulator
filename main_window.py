@@ -27,6 +27,7 @@ from kafka_producer import KProducer
 import target_pb2
 from database import Database
 from location_calculator import LocationCalculator
+from decode_data import decode_data
 
 
 def json_serial(obj):
@@ -99,6 +100,8 @@ class MainWindow(QWidget):
         super().__init__(parent)
         self.setObjectName("MainWindow")
         self.setWindowTitle("Simu Kafka Sender")
+
+        self.source_unchecked_timestamps = {}
 
         # --- 回放模块状态 ---
         self.playback_query_cache = {} # {row_index: {"params": {...}, "points": [...]}}
@@ -260,15 +263,18 @@ class MainWindow(QWidget):
         self.realtime_tab = QWidget()
         self.static_info_tab = QWidget()
         self.playback_tab = QWidget()
+        self.decode_pb_tab = QWidget()
 
         self.tab_widget.addTab(self.realtime_tab, "实时目标")
         self.tab_widget.addTab(self.static_info_tab, "静态信息")
         self.tab_widget.addTab(self.playback_tab, "回放目标")
+        self.tab_widget.addTab(self.decode_pb_tab, "解析unionTargetPB")
 
         # --- 配置每个标签页的布局 ---
         self.setup_realtime_tab()
         self.setup_static_info_tab()
         self.setup_playback_tab()
+        self.setup_decode_pb_tab()
 
         # --- 设置光标样式 ---
         self.set_cursors()
@@ -488,7 +494,7 @@ class MainWindow(QWidget):
 
         self.playback_send_inputs.update({
             "mmsi": QLineEdit(),
-            "bds": QLineEdit(),
+            # "bds": QLineEdit(),
             "longitude": QLineEdit(),
             "latitude": QLineEdit()
         })
@@ -503,22 +509,22 @@ class MainWindow(QWidget):
         mmsi_layout.addWidget(random_mmsi_btn)
         sending_layout.addLayout(mmsi_layout, 1, 1)
 
-        # BDS - 行号从2开始
-        sending_layout.addWidget(QLabel("北斗号:"), 2, 0, Qt.AlignRight)
-        bds_layout = QHBoxLayout()
-        bds_layout.addWidget(self.playback_send_inputs["bds"])
-        random_bds_btn = QPushButton("随机")
-        random_bds_btn.clicked.connect(lambda: self._generate_random_value("bds", "BDS", self.playback_send_inputs, playback_logger))
-        bds_layout.addWidget(random_bds_btn)
-        sending_layout.addLayout(bds_layout, 2, 1)
+        # # BDS - 行号从2开始
+        # sending_layout.addWidget(QLabel("北斗号:"), 2, 0, Qt.AlignRight)
+        # bds_layout = QHBoxLayout()
+        # bds_layout.addWidget(self.playback_send_inputs["bds"])
+        # random_bds_btn = QPushButton("随机")
+        # random_bds_btn.clicked.connect(lambda: self._generate_random_value("bds", "BDS", self.playback_send_inputs, playback_logger))
+        # bds_layout.addWidget(random_bds_btn)
+        # sending_layout.addLayout(bds_layout, 2, 1)
 
         # Longitude - 行号从3开始
-        sending_layout.addWidget(QLabel("经度:"), 3, 0, Qt.AlignRight)
-        sending_layout.addWidget(self.playback_send_inputs["longitude"], 3, 1)
+        sending_layout.addWidget(QLabel("经度:"), 2, 0, Qt.AlignRight)
+        sending_layout.addWidget(self.playback_send_inputs["longitude"], 2, 1)
 
         # Latitude - 行号从4开始
-        sending_layout.addWidget(QLabel("纬度:"), 4, 0, Qt.AlignRight)
-        sending_layout.addWidget(self.playback_send_inputs["latitude"], 4, 1)
+        sending_layout.addWidget(QLabel("纬度:"), 3, 0, Qt.AlignRight)
+        sending_layout.addWidget(self.playback_send_inputs["latitude"], 3, 1)
 
         # Buttons - 行号从5开始
         self.playback_start_send_btn = QPushButton("发送勾选轨迹")
@@ -529,7 +535,7 @@ class MainWindow(QWidget):
         button_layout = QHBoxLayout()
         button_layout.addWidget(self.playback_start_send_btn)
         button_layout.addWidget(self.playback_stop_send_btn)
-        sending_layout.addLayout(button_layout, 5, 0, 1, 2)
+        sending_layout.addLayout(button_layout, 4, 0, 1, 2)
 
         sending_group.setLayout(sending_layout)
 
@@ -544,6 +550,91 @@ class MainWindow(QWidget):
         # --- 初始化 ---
         self.populate_saved_tracks_dropdown()
         self.add_playback_query_row()
+
+    def setup_decode_pb_tab(self):
+        """配置“解析PB”标签页的UI内容"""
+        main_layout = QVBoxLayout(self.decode_pb_tab)
+        main_layout.setSpacing(10)
+        main_layout.setContentsMargins(10, 10, 10, 10)
+
+        # --- 输入区域 ---
+        input_group = QGroupBox("输入Protobuf数据")
+        input_layout = QVBoxLayout()
+
+        self.pb_input_text = QTextEdit()
+        self.pb_input_text.setPlaceholderText("在此处粘贴需要解析的Protobuf Hex字符串...")
+        self.pb_input_text.setAcceptRichText(False)
+        self.pb_input_text.setFont(QFont("Courier New", 10))
+        input_layout.addWidget(self.pb_input_text)
+
+        # --- 操作按钮 ---
+        button_layout = QHBoxLayout()
+        decode_btn = QPushButton("解析")
+        decode_btn.clicked.connect(self.handle_decode_pb)
+        clear_btn = QPushButton("清空")
+        clear_btn.clicked.connect(self.handle_clear_pb_fields)
+        button_layout.addStretch()
+        button_layout.addWidget(decode_btn)
+        button_layout.addWidget(clear_btn)
+        input_layout.addLayout(button_layout)
+
+        input_group.setLayout(input_layout)
+        main_layout.addWidget(input_group, 1) # 占据1/3空间
+
+        # --- 输出区域 ---
+        output_group = QGroupBox("解析结果")
+        output_layout = QVBoxLayout()
+        self.pb_output_text = QTextEdit()
+        self.pb_output_text.setReadOnly(True)
+        self.pb_output_text.setFont(QFont("Courier New", 10))
+        output_layout.addWidget(self.pb_output_text)
+
+        # --- 复制按钮 ---
+        copy_button_layout = QHBoxLayout()
+        copy_btn = QPushButton("复制结果")
+        copy_btn.clicked.connect(self.handle_copy_pb_result)
+        copy_button_layout.addStretch()
+        copy_button_layout.addWidget(copy_btn)
+        output_layout.addLayout(copy_button_layout)
+
+        output_group.setLayout(output_layout)
+        main_layout.addWidget(output_group, 2) # 占据2/3空间
+
+    def handle_copy_pb_result(self):
+        """复制PB解析结果到剪贴板"""
+        clipboard = QApplication.clipboard()
+        content = self.pb_output_text.toPlainText()
+        if content:
+            clipboard.setText(content)
+            self.log_message("PB解析结果已复制到剪贴板。", "decode_pb")
+        else:
+            self.log_message("PB解析结果为空，无需复制。", "decode_pb")
+
+    def handle_decode_pb(self):
+        """处理PB解析按钮点击事件"""
+        hex_string = self.pb_input_text.toPlainText().strip()
+        if not hex_string:
+            self.pb_output_text.setText("错误：输入内容为空。")
+            return
+
+        try:
+            # 调用已有的解析函数，它返回一个元组 (success, message)
+            success, decoded_message = decode_data(hex_string)
+            self.pb_output_text.setText(decoded_message)
+            if success:
+                self.log_message("成功解析一组PB数据。", "decode_pb")
+            else:
+                # 错误信息已经在 decoded_message 中
+                self.log_message("解析PB数据失败。", "decode_pb")
+        except Exception as e:
+            error_message = f"解析时发生意外错误！\n\n错误详情:\n{str(e)}\n\n请检查输入是否为有效的Hex字符串。"
+            self.pb_output_text.setText(error_message)
+            self.log_message(f"解析PB数据时发生严重错误: {e}", "decode_pb")
+
+    def handle_clear_pb_fields(self):
+        """清空PB解析页签的输入和输出框"""
+        self.pb_input_text.clear()
+        self.pb_output_text.clear()
 
     def set_cursors(self):
         """统一设置所有控件的光标样式"""
@@ -598,8 +689,8 @@ class MainWindow(QWidget):
         # 填充下拉列表
         for text, value in self.config['ui_options']['eTargetType'].items():
             self.inputs['eTargetType'].addItem(text, value)
-        for text, value in self.config['ui_options']['shiptype'].items():
-            self.inputs['shiptype'].addItem(text, value)
+        for shiptype_item in self.config['ui_options']['shiptype']:
+            self.inputs['shiptype'].addItem(shiptype_item['name'], shiptype_item['code'])
         for text, value in self.config['ui_options']['sost'].items():
             self.inputs['sost'].addItem(text, value)
         for text, value in self.config['ui_options']['dataStatus'].items():
@@ -716,20 +807,29 @@ class MainWindow(QWidget):
 
         self.inputs.update({
             "radarSource": QLineEdit(), "aisSource": QLineEdit(),
-            "bdSource": QLineEdit()
+            "bdSource": QLineEdit(),
+            "radarSource_checkbox": QCheckBox("雷达信息源:"),
+            "aisSource_checkbox": QCheckBox("AIS信息源:"),
+            "bdSource_checkbox": QCheckBox("北斗信息源:")
         })
+
+        # Set checkboxes to be checked by default
+        self.inputs["radarSource_checkbox"].setChecked(True)
+        self.inputs["aisSource_checkbox"].setChecked(True)
+        self.inputs["bdSource_checkbox"].setChecked(True)
+
         # 为雷达信息源输入框添加占位符文本
         self.inputs["radarSource"].setPlaceholderText("输入id，逗号分隔")
         self.inputs["aisSource"].setPlaceholderText("输入id，逗号分隔")
         self.inputs["bdSource"].setPlaceholderText("输入id")
 
-        h_layout.addWidget(QLabel("雷达信息源:"))
+        h_layout.addWidget(self.inputs["radarSource_checkbox"])
         h_layout.addWidget(self.inputs["radarSource"])
         h_layout.addSpacing(15)
-        h_layout.addWidget(QLabel("AIS信息源:"))
+        h_layout.addWidget(self.inputs["aisSource_checkbox"])
         h_layout.addWidget(self.inputs["aisSource"])
         h_layout.addSpacing(15)
-        h_layout.addWidget(QLabel("北斗信息源:"))
+        h_layout.addWidget(self.inputs["bdSource_checkbox"])
         h_layout.addWidget(self.inputs["bdSource"])
         h_layout.addStretch(1)
 
@@ -879,17 +979,11 @@ class MainWindow(QWidget):
             "len": QLineEdit(),"shipWidth": QLineEdit(),
             "draught": QLineEdit(),
             "shiptype": QComboBox(), "destination": QLineEdit(),
-            "eta": CustomDateTimeEdit(),
+            "eta": QLineEdit(),
         }
 
-        for text, value in self.config['ui_options']['shiptype'].items():
-            self.static_inputs['shiptype'].addItem(text, value)
-
-        eta_widget = self.static_inputs["eta"]
-        eta_widget.setDisplayFormat("yyyy-MM-dd HH:mm:ss")
-        eta_widget.setCalendarPopup(True)
-        eta_widget.setSpecialValueText(" ")  # Display empty space when cleared
-        eta_widget.setDateTime(QDateTime.currentDateTime()) # Default to current time
+        for shiptype_item in self.config['ui_options']['shiptype']:
+            self.static_inputs['shiptype'].addItem(shiptype_item['name'], shiptype_item['code'])
 
         if 'deviceCategory' in self.config['ui_options']:
             for text, value in self.config['ui_options']['deviceCategory'].items():
@@ -942,15 +1036,8 @@ class MainWindow(QWidget):
         grid_layout.addWidget(QLabel("船舶类型:"), 4, 2, Qt.AlignRight)
         grid_layout.addWidget(self.static_inputs["shiptype"], 4, 3)
 
-        eta_layout = QHBoxLayout()
-        eta_layout.setContentsMargins(0, 0, 0, 0)
-        eta_layout.addWidget(self.static_inputs["eta"])
-        clear_eta_btn = QPushButton("清空")
-        clear_eta_btn.setFixedWidth(60)
-        clear_eta_btn.clicked.connect(self.clear_eta_datetime)
-        eta_layout.addWidget(clear_eta_btn)
         grid_layout.addWidget(QLabel("预到时间:"), 5, 0, Qt.AlignRight)
-        grid_layout.addLayout(eta_layout, 5, 1)
+        grid_layout.addWidget(self.static_inputs["eta"], 5, 1)
 
 
         grid_layout.addWidget(QLabel("目的地:"), 5, 2, Qt.AlignRight)
@@ -985,11 +1072,7 @@ class MainWindow(QWidget):
         group_box.setLayout(v_layout)
         return group_box
 
-    def clear_eta_datetime(self):
-        """Clears the ETA QDateTimeEdit widget by setting it to its minimum value."""
-        eta_widget = self.static_inputs.get("eta")
-        if eta_widget:
-            eta_widget.setDateTime(eta_widget.minimumDateTime())
+    
 
     # ===================================================================
     # 通用及实时目标 - 逻辑
@@ -1504,26 +1587,11 @@ class MainWindow(QWidget):
                 self._generate_random_value("mmsi", "MMSI", self.inputs, self.log_message)
                 pos_info.mmsi = self.get_field_value("mmsi", int, 0)
             pos_info.vesselName = self.get_field_value("vesselName")
-            ais_source_text = self.inputs["aisSource"].text().strip()
-            if ais_source_text:
-                source = target.sources.add()
-                source.provider = "HLX"
-                source.type = "AIS"
-                ais_ids = [id.strip() for id in ais_source_text.split(',') if id.strip()]
-                for ais_id in ais_ids:
-                    source.ids.append(ais_id)
-                    info = target.vecFusionedTargetInfo.add()
-                    info.uiStationType = 65
-                    info.ullPosUpdateTime = target.lastTm
-                    info.ullUniqueId = target.id
-                    info.uiStationId = int(ais_id)
         else:
             pos_info.mmsi = 0
             pos_info.vesselName = ""
             self.inputs['mmsi'].clear()
             self.inputs['vesselName'].clear()
-
-
 
         if "BDS" not in selected_class:
             self.inputs['bds'].clear()
@@ -1548,19 +1616,89 @@ class MainWindow(QWidget):
         pos_info.aidtype = 1
         target.adapterId = self.inputs['province'].currentData()
 
+        # --- AIS Source Logic ---
+        ais_source_text = self.inputs["aisSource"].text().strip()
+        if ais_source_text:
+            source = target.sources.add()
+            source.provider = "HLX"
+            source.type = "AIS"
+            ais_ids = [id.strip() for id in ais_source_text.split(',') if id.strip()]
+
+            is_checked = self.inputs["aisSource_checkbox"].isChecked()
+            current_time = target.lastTm
+            update_time = current_time
+
+            if is_checked:
+                if "ais" in self.source_unchecked_timestamps:
+                    del self.source_unchecked_timestamps["ais"]
+            else:
+                if "ais" not in self.source_unchecked_timestamps:
+                    self.source_unchecked_timestamps["ais"] = current_time
+                update_time = self.source_unchecked_timestamps["ais"]
+
+            for ais_id in ais_ids:
+                source.ids.append(ais_id)
+                info = target.vecFusionedTargetInfo.add()
+                info.uiStationType = 65
+                info.ullPosUpdateTime = update_time
+                info.ullUniqueId = target.id
+                info.uiStationId = int(ais_id)
+
+        # --- Radar Source Logic ---
         radar_source_text = self.inputs["radarSource"].text().strip()
         if radar_source_text:
             source = target.sources.add()
             source.provider = "HLX"
             source.type = "RADAR"
             radar_ids = [id.strip() for id in radar_source_text.split(',') if id.strip()]
+
+            is_checked = self.inputs["radarSource_checkbox"].isChecked()
+            current_time = target.lastTm
+            update_time = current_time
+
+            if is_checked:
+                if "radar" in self.source_unchecked_timestamps:
+                    del self.source_unchecked_timestamps["radar"]
+            else:
+                if "radar" not in self.source_unchecked_timestamps:
+                    self.source_unchecked_timestamps["radar"] = current_time
+                update_time = self.source_unchecked_timestamps["radar"]
+
             for radar_id in radar_ids:
                 source.ids.append(radar_id)
                 info = target.vecFusionedTargetInfo.add()
                 info.uiStationType = 82
-                info.ullPosUpdateTime = target.lastTm
+                info.ullPosUpdateTime = update_time
                 info.ullUniqueId = target.id
                 info.uiStationId = int(radar_id)
+
+        # --- BDS Source Logic ---
+        bd_source_text = self.inputs["bdSource"].text().strip()
+        if bd_source_text:
+            source = target.sources.add()
+            source.provider = "HLX"
+            source.type = "BDS"
+            bd_ids = [id.strip() for id in bd_source_text.split(',') if id.strip()]
+
+            is_checked = self.inputs["bdSource_checkbox"].isChecked()
+            current_time = target.lastTm
+            update_time = current_time
+
+            if is_checked:
+                if "bds" in self.source_unchecked_timestamps:
+                    del self.source_unchecked_timestamps["bds"]
+            else:
+                if "bds" not in self.source_unchecked_timestamps:
+                    self.source_unchecked_timestamps["bds"] = current_time
+                update_time = self.source_unchecked_timestamps["bds"]
+
+            for bd_id in bd_ids:
+                source.ids.append(bd_id)
+                info = target.vecFusionedTargetInfo.add()
+                info.uiStationType = 66  # Assuming 66 for BDS
+                info.ullPosUpdateTime = update_time
+                info.ullUniqueId = target.id
+                info.uiStationId = int(bd_id)
 
         if "RADAR" == selected_class:
             pos_info.shiptype = 99
@@ -1667,8 +1805,6 @@ class MainWindow(QWidget):
                 if isinstance(widget, QLineEdit):
                     text = widget.text()
                 elif isinstance(widget, QComboBox):
-                    if widget.currentIndex() == -1:
-                        return default_value
                     text = widget.currentText()
                 elif isinstance(widget, QDateTimeEdit):
                     if widget.dateTime() == widget.minimumDateTime():
@@ -1688,6 +1824,13 @@ class MainWindow(QWidget):
             port = random.randint(0, get_static_val("shipWidth", int, 0))
             starboard =get_static_val("shipWidth", int, 0) -port
 
+            selected_shiptype_code = self.static_inputs["shiptype"].currentData()
+            shiptype_name_en = "Other" 
+            for shiptype_item in self.config['ui_options']['shiptype']:
+                if shiptype_item['code'] == selected_shiptype_code:
+                    shiptype_name_en = shiptype_item['name_en']
+                    break
+
             mmsi_val = get_static_val("mmsi")
             if mmsi_val:
                 ais_info = {
@@ -1701,7 +1844,7 @@ class MainWindow(QWidget):
                     "Length": str(get_static_val("len", float, 0.0)),
                     "Wide": str(get_static_val("shipWidth",float, 0.0)),
                     "Draught": get_static_val("draught"),
-                    "Ship Type": self.static_inputs["shiptype"].currentText(),
+                    "Ship Type": shiptype_name_en,
                     "Destination": get_static_val("destination"),
                     "etaTime": get_static_val("eta"),
                     "A (to Bow)": str(bow),
@@ -1745,7 +1888,10 @@ class MainWindow(QWidget):
                         if isinstance(widget, QLineEdit): widget.setText(raw_value)
                         elif isinstance(widget, QComboBox):
                             index = widget.findText(raw_value, Qt.MatchContains)
-                            if index != -1: widget.setCurrentIndex(index)
+                            if index != -1:
+                                widget.setCurrentIndex(index)
+                            elif widget.isEditable():
+                                widget.setEditText(raw_value)
                         elif isinstance(widget, QDateTimeEdit):
                             try:
                                 dt = QDateTime.fromString(raw_value, "yyyy-MM-dd HH:mm:ss")
@@ -2055,7 +2201,7 @@ class MainWindow(QWidget):
         base_lon_str = self.playback_send_inputs['longitude'].text().strip()
         base_lat_str = self.playback_send_inputs['latitude'].text().strip()
         override_mmsi_str = self.playback_send_inputs['mmsi'].text().strip()
-        override_bds_str = self.playback_send_inputs['bds'].text().strip()
+        # override_bds_str = self.playback_send_inputs['bds'].text().strip()
         use_offset = bool(base_lon_str and base_lat_str)
         lon_offset, lat_offset = 0.0, 0.0
 
@@ -2138,10 +2284,10 @@ class MainWindow(QWidget):
                 current_override_mmsi = int(override_mmsi_str) + mmsi_counter
                 mmsi_counter += 1
 
-            current_override_bds = 0
-            if override_bds_str and id(trajectory) in bds_traj_ids:
-                current_override_bds = int(override_bds_str) + bds_counter
-                bds_counter += 1
+            # current_override_bds = 0
+            # if override_bds_str and id(trajectory) in bds_traj_ids:
+            #     current_override_bds = int(override_bds_str) + bds_counter
+            #     bds_counter += 1
 
             for point in trajectory:
                 try:
@@ -2194,7 +2340,7 @@ class MainWindow(QWidget):
                     pos_info = target.pos
                     pos_info.id = target.id
                     pos_info.mmsi = current_override_mmsi if current_override_mmsi > 0 else int(point.get('mmsi') or 0)
-                    pos_info.imo = current_override_bds if current_override_bds > 0 else int(point.get('bds') or 0)
+                    # pos_info.imo = current_override_bds if current_override_bds > 0 else int(point.get('bds') or 0)
                     pos_info.vesselName = point.get('vesselName') or ''
                     pos_info.speed = float(point.get('speed') or 0.0)
                     pos_info.state = int(point.get('state') or 14)
