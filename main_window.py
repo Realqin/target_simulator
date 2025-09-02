@@ -107,7 +107,7 @@ class MainWindow(QWidget):
         self.playback_query_cache = {} # {row_index: {"params": {...}, "points": [...]}}
         self.data_track_dir = "data_track"
         os.makedirs(self.data_track_dir, exist_ok=True)
-        # self.playback_send_inputs = {}
+        self.playback_send_inputs = {}
         # self.playback_sending_timer = QTimer(self)
         # self.playback_sending_timer.timeout.connect(self.send_playback_manual_data)
         self.trajectory_sending_queue = []
