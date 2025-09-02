@@ -392,6 +392,7 @@ class MainWindow(QWidget):
         tab_layout.addLayout(right_v_layout, stretch=1)
 
     def setup_playback_tab(self):
+
         """配置“回放目标”标签页的UI内容（重构后）"""
         main_layout = QVBoxLayout(self.playback_tab)
 
@@ -1734,10 +1735,10 @@ class MainWindow(QWidget):
                 province_name_en = province_item['name_en']
                 break
 
-        terminal= self.get_field_value("bds", float, 0.0)
+        terminal= self.get_field_value("bds", int, 0)
         if terminal ==0:
             self._generate_random_value("bds", "BDS", self.inputs, self.log_message)
-            terminal = self.get_field_value("bds", float, 0.0)
+            terminal = self.get_field_value("bds", int, 0)
 
         if "AIS" not in selected_class:
             self.inputs['mmsi'].clear()
@@ -1749,7 +1750,7 @@ class MainWindow(QWidget):
             "disassemble": 0, "distress": 0, "jobType": "",
             "latitude": self.get_field_value("latitude", float, 0.0),
             "longitude": self.get_field_value("longitude", float, 0.0),
-            "online": 0, "power": 0, "provider": self.get_field_value("bdSource", float, 0.0),
+            "online": 0, "power": 0, "provider": self.get_field_value("bdSource", int, 0),
             "province": province_name_en,
             "shipLength": self.get_field_value("len", float, 0.0),
             "shipName": self.get_field_value("shipName"),
@@ -2324,7 +2325,7 @@ class MainWindow(QWidget):
                                 adapter_id = province_item['adapterId']
                                 break
                     target.adapterId = int(adapter_id)
-                    target.eTargetType =  point.get('targetType')
+                    target.eTargetType =  point.get('targetType') or 'TT_A'
                     target.sost = int(point.get('state') or 14)
 
                     # eTargetType_val = 0
@@ -2334,8 +2335,9 @@ class MainWindow(QWidget):
                     #             eTargetType_val = rule['eTargetType']
                     #             break
                     # target.s_class = eTargetType_val
+                    target.status = 2 if point.get('status') == 'UNKNOW' else (point.get('status') or 2)
 
-                    target.status = point.get('status') or  ''
+
 
                     pos_info = target.pos
                     pos_info.id = target.id
@@ -3463,70 +3465,70 @@ class MainWindow(QWidget):
         # 使用一个主定时器来驱动所有轨迹的回放
         self.playback_timer.start(10) # 使用一个较小的基础间隔来检查
 
-    def send_playback_data(self):
-        """定时器调用的核心发送逻辑"""
-        active_targets_exist = False
-
-        for target_info in self.playback_targets:
-            # 检查此轨迹是否已播放完毕
-            if target_info["current_index"] >= len(target_info["points"]):
-                continue
-
-            active_targets_exist = True
-
-            # 检查是否到了发送时间
-            now = time.time() * 1000
-            if "last_sent_time" not in target_info:
-                target_info["last_sent_time"] = 0
-
-            if now - target_info["last_sent_time"] >= target_info["interval"]:
-                point_data = target_info["points"][target_info["current_index"]]
-
-                # --- 构建Protobuf消息 ---
-                try:
-                    target_list = target_pb2.TargetProtoList()
-                    target = target_list.list.add()
-
-                    # 从字典填充Protobuf对象
-                    for key, value in point_data.items():
-                        if key == 'pos': # pos是嵌套消息
-                            pos_dict = json.loads(value) if isinstance(value, str) else value
-                            for pos_key, pos_value in pos_dict.items():
-                                if hasattr(target.pos, pos_key):
-                                    setattr(target.pos, pos_key, pos_value)
-                        elif hasattr(target, key):
-                            # 类型转换和兼容性处理
-                            field_type = type(getattr(target, key))
-                            if field_type is int and value is not None:
-                                setattr(target, key, int(value))
-                            elif field_type is float and value is not None:
-                                setattr(target, key, float(value))
-                            elif value is not None:
-                                setattr(target, key, value)
-
-                    # 确保关键字段存在
-                    target.lastTm = int(time.time() * 1000)
-                    target.status = 2 # 回放数据总是update
-
-                    # 发送
-                    pb_data = target_list.SerializeToString()
-                    topic = self.config['kafka']['topic']
-                    self.kafka_producer.send_message(topic, pb_data)
-
-                    self.log_message(f"回放: 发送点 {self.current_playback_index + 1}/{len(self.playback_targets)} (ID: {target.id}, MMSI: {pos_info.mmsi}, Time: {point_data.get('lastDT', 'N/A')})", "playback")
-
-                    target_info["current_index"] += 1
-                    target_info["last_sent_time"] = now
-
-                except Exception as e:
-                    self.log_message(f"错误: 回放时构建或发送Protobuf失败: {e}", "playback")
-                    # 发生错误时，停止此条轨迹的播放
-                    target_info["current_index"] = len(target_info["points"])
-
-
-        if not active_targets_exist:
-            self.playback_timer.stop()
-            self.log_message("所有轨迹回放完毕。", "playback")
+    # def send_playback_data(self):
+    #     """定时器调用的核心发送逻辑"""
+    #     active_targets_exist = False
+    #
+    #     for target_info in self.playback_targets:
+    #         # 检查此轨迹是否已播放完毕
+    #         if target_info["current_index"] >= len(target_info["points"]):
+    #             continue
+    #
+    #         active_targets_exist = True
+    #
+    #         # 检查是否到了发送时间
+    #         now = time.time() * 1000
+    #         if "last_sent_time" not in target_info:
+    #             target_info["last_sent_time"] = 0
+    #
+    #         if now - target_info["last_sent_time"] >= target_info["interval"]:
+    #             point_data = target_info["points"][target_info["current_index"]]
+    #
+    #             # --- 构建Protobuf消息 ---
+    #             try:
+    #                 target_list = target_pb2.TargetProtoList()
+    #                 target = target_list.list.add()
+    #
+    #                 # 从字典填充Protobuf对象
+    #                 for key, value in point_data.items():
+    #                     if key == 'pos': # pos是嵌套消息
+    #                         pos_dict = json.loads(value) if isinstance(value, str) else value
+    #                         for pos_key, pos_value in pos_dict.items():
+    #                             if hasattr(target.pos, pos_key):
+    #                                 setattr(target.pos, pos_key, pos_value)
+    #                     elif hasattr(target, key):
+    #                         # 类型转换和兼容性处理
+    #                         field_type = type(getattr(target, key))
+    #                         if field_type is int and value is not None:
+    #                             setattr(target, key, int(value))
+    #                         elif field_type is float and value is not None:
+    #                             setattr(target, key, float(value))
+    #                         elif value is not None:
+    #                             setattr(target, key, value)
+    #
+    #                 # 确保关键字段存在
+    #                 target.lastTm = int(time.time() * 1000)
+    #                 target.status = 2 # 回放数据总是update
+    #
+    #                 # 发送
+    #                 pb_data = target_list.SerializeToString()
+    #                 topic = self.config['kafka']['topic']
+    #                 self.kafka_producer.send_message(topic, pb_data)
+    #
+    #                 self.log_message(f"回放: 发送点 {self.current_playback_index + 1}/{len(self.playback_targets)} (ID: {target.id}, MMSI: {target.mmsi}, Time: {point_data.get('lastDT', 'N/A')})", "playback")
+    #
+    #                 target_info["current_index"] += 1
+    #                 target_info["last_sent_time"] = now
+    #
+    #             except Exception as e:
+    #                 self.log_message(f"错误: 回放时构建或发送Protobuf失败: {e}", "playback")
+    #                 # 发生错误时，停止此条轨迹的播放
+    #                 target_info["current_index"] = len(target_info["points"])
+    #
+    #
+    #     if not active_targets_exist:
+    #         self.playback_timer.stop()
+    #         self.log_message("所有轨迹回放完毕。", "playback")
 
 
     def log_message(self, message, tab='realtime'):

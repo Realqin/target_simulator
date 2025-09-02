@@ -59,7 +59,8 @@
     "dataStatus": {
       "new": 1,
       "update": 2,
-      "delete": 3
+      "delete": 3,
+      "UNKNOW": 4
     },
     "province": [
       { "name": "海南", "name_en": "HaiNan", "provinceCode": "460000", "adapterId": 12 },
